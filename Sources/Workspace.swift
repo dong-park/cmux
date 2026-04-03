@@ -283,6 +283,7 @@ extension Workspace {
             customColor: customColor,
             isPinned: isPinned,
             currentDirectory: currentDirectory,
+            initialDirectory: initialDirectory,
             focusedPanelId: focusedPanelId,
             layout: layout,
             panels: panelSnapshots,
@@ -5467,6 +5468,7 @@ final class Workspace: Identifiable, ObservableObject {
     @Published var isPinned: Bool = false
     @Published var customColor: String?  // hex string, e.g. "#C0392B"
     @Published var currentDirectory: String
+    @Published var initialDirectory: String
     private(set) var preferredBrowserProfileID: UUID?
 
     /// Ordinal for CMUX_PORT range assignment (monotonically increasing per app session)
@@ -5607,6 +5609,7 @@ final class Workspace: Identifiable, ObservableObject {
             sidebarObservationSignal($isPinned),
             sidebarObservationSignal($customColor),
             sidebarObservationSignal($currentDirectory),
+            sidebarObservationSignal($initialDirectory),
             $panels
                 .map(SidebarPanelObservationState.init)
                 .dropFirst()
@@ -5798,9 +5801,11 @@ final class Workspace: Identifiable, ObservableObject {
 
         let trimmedWorkingDirectory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let hasWorkingDirectory = !trimmedWorkingDirectory.isEmpty
-        self.currentDirectory = hasWorkingDirectory
+        let resolvedDirectory = hasWorkingDirectory
             ? trimmedWorkingDirectory
             : FileManager.default.homeDirectoryForCurrentUser.path
+        self.currentDirectory = resolvedDirectory
+        self.initialDirectory = resolvedDirectory
 
         // Configure bonsplit with keepAllAlive to preserve terminal state
         // and keep split entry instantaneous.
@@ -6448,6 +6453,9 @@ final class Workspace: Identifiable, ObservableObject {
     func setCustomTitle(_ title: String?) {
         let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
+            // Once a custom title is set, it cannot be cleared by passing nil/empty.
+            // The user must explicitly set a new non-empty title to change it.
+            guard customTitle == nil else { return }
             customTitle = nil
             self.title = processTitle
         } else {

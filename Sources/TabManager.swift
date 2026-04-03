@@ -5583,7 +5583,7 @@ extension TabManager {
             Self.nextPortOrdinal += 1
             let workspace = Workspace(
                 title: workspaceSnapshot.processTitle,
-                workingDirectory: workspaceSnapshot.currentDirectory,
+                workingDirectory: workspaceSnapshot.initialDirectory ?? workspaceSnapshot.currentDirectory,
                 portOrdinal: ordinal
             )
             workspace.owningTabManager = self
