@@ -2131,6 +2131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let tabManager: TabManager
         let sidebarState: SidebarState
         let sidebarSelectionState: SidebarSelectionState
+        let rightPanelState: RightPanelState
         weak var window: NSWindow?
 
         init(
@@ -2138,12 +2139,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             tabManager: TabManager,
             sidebarState: SidebarState,
             sidebarSelectionState: SidebarSelectionState,
+            rightPanelState: RightPanelState,
             window: NSWindow?
         ) {
             self.windowId = windowId
             self.tabManager = tabManager
             self.sidebarState = sidebarState
             self.sidebarSelectionState = sidebarSelectionState
+            self.rightPanelState = rightPanelState
             self.window = window
         }
     }
@@ -2183,6 +2186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     weak var tabManager: TabManager?
     weak var notificationStore: TerminalNotificationStore?
     weak var sidebarState: SidebarState?
+    weak var rightPanelState: RightPanelState?
     weak var fullscreenControlsViewModel: TitlebarControlsViewModel?
     weak var sidebarSelectionState: SidebarSelectionState?
     var shortcutLayoutCharacterProvider: (UInt16, NSEvent.ModifierFlags) -> String? = KeyboardLayout.character(forKeyCode:modifierFlags:)
@@ -3183,6 +3187,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         context.sidebarSelectionState.selection = snapshot.sidebar.selection.sidebarSelection
 
+        if let rightPanel = snapshot.rightPanel {
+            context.rightPanelState.isVisible = rightPanel.isVisible
+            context.rightPanelState.persistedWidth = CGFloat(
+                SessionPersistencePolicy.sanitizedRightPanelWidth(rightPanel.width)
+            )
+        }
+
         if let restoredFrame = resolvedWindowFrame(from: snapshot), let window {
             window.setFrame(restoredFrame, display: true)
 #if DEBUG
@@ -3970,6 +3981,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         isVisible: context.sidebarState.isVisible,
                         selection: SessionSidebarSelection(selection: context.sidebarSelectionState.selection),
                         width: SessionPersistencePolicy.sanitizedSidebarWidth(Double(context.sidebarState.persistedWidth))
+                    ),
+                    rightPanel: SessionRightPanelSnapshot(
+                        isVisible: context.rightPanelState.isVisible,
+                        width: SessionPersistencePolicy.sanitizedRightPanelWidth(Double(context.rightPanelState.persistedWidth))
                     )
                 )
             }
@@ -4041,7 +4056,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         windowId: UUID,
         tabManager: TabManager,
         sidebarState: SidebarState,
-        sidebarSelectionState: SidebarSelectionState
+        sidebarSelectionState: SidebarSelectionState,
+        rightPanelState: RightPanelState
     ) {
         tabManager.window = window
 
@@ -4060,6 +4076,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 tabManager: tabManager,
                 sidebarState: sidebarState,
                 sidebarSelectionState: sidebarSelectionState,
+                rightPanelState: rightPanelState,
                 window: window
             )
             NotificationCenter.default.addObserver(
@@ -5629,6 +5646,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return false
     }
 
+    @discardableResult
+    func toggleGitChangesPanelInActiveMainWindow() -> Bool {
+        if let activeManager = tabManager,
+           let activeContext = mainWindowContexts.values.first(where: { $0.tabManager === activeManager }) {
+            activeContext.rightPanelState.toggle()
+            return true
+        }
+        if let keyContext = contextForMainWindow(NSApp.keyWindow) {
+            keyContext.rightPanelState.toggle()
+            return true
+        }
+        if let mainContext = contextForMainWindow(NSApp.mainWindow) {
+            mainContext.rightPanelState.toggle()
+            return true
+        }
+        if let fallbackContext = mainWindowContexts.values.first {
+            fallbackContext.rightPanelState.toggle()
+            return true
+        }
+        if let rightPanelState {
+            rightPanelState.toggle()
+            return true
+        }
+        return false
+    }
+
     func sidebarVisibility(windowId: UUID) -> Bool? {
         mainWindowContexts.values.first(where: { $0.windowId == windowId })?.sidebarState.isVisible
     }
@@ -6193,6 +6236,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let sidebarSelectionState = SidebarSelectionState(
             selection: sessionWindowSnapshot?.sidebar.selection.sidebarSelection ?? .tabs
         )
+        let rightPanelWidth = sessionWindowSnapshot?.rightPanel?.width
+            .map(SessionPersistencePolicy.sanitizedRightPanelWidth)
+            ?? SessionPersistencePolicy.defaultRightPanelWidth
+        let rightPanelState = RightPanelState(
+            isVisible: sessionWindowSnapshot?.rightPanel?.isVisible ?? false,
+            persistedWidth: CGFloat(rightPanelWidth)
+        )
         let notificationStore = TerminalNotificationStore.shared
 
         let cmuxConfigStore = CmuxConfigStore()
@@ -6204,6 +6254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             .environmentObject(notificationStore)
             .environmentObject(sidebarState)
             .environmentObject(sidebarSelectionState)
+            .environmentObject(rightPanelState)
             .environmentObject(cmuxConfigStore)
 
         // Use the current key window's size for new windows so Cmd+Shift+N
@@ -6284,7 +6335,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             windowId: windowId,
             tabManager: tabManager,
             sidebarState: sidebarState,
-            sidebarSelectionState: sidebarSelectionState
+            sidebarSelectionState: sidebarSelectionState,
+            rightPanelState: rightPanelState
         )
         installFileDropOverlay(on: window, tabManager: tabManager)
         if TerminalController.shouldSuppressSocketCommandActivation() {
@@ -9782,6 +9834,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Primary UI shortcuts
         if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .toggleSidebar)) {
             _ = toggleSidebarInActiveMainWindow()
+            return true
+        }
+
+        if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .toggleGitChangesPanel)) {
+            _ = toggleGitChangesPanelInActiveMainWindow()
             return true
         }
 

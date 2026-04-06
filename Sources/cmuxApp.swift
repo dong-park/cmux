@@ -139,6 +139,7 @@ struct cmuxApp: App {
     @StateObject private var notificationStore = TerminalNotificationStore.shared
     @StateObject private var sidebarState = SidebarState()
     @StateObject private var sidebarSelectionState = SidebarSelectionState()
+    @StateObject private var rightPanelState = RightPanelState()
     @StateObject private var cmuxConfigStore = CmuxConfigStore()
     private let primaryWindowId = UUID()
     @AppStorage(AppearanceSettings.appearanceModeKey) private var appearanceMode = AppearanceSettings.defaultMode.rawValue
@@ -166,6 +167,8 @@ struct cmuxApp: App {
     private var showBrowserJavaScriptConsoleShortcutData = Data()
     @AppStorage(KeyboardShortcutSettings.Action.toggleReactGrab.defaultsKey)
     private var toggleReactGrabShortcutData = Data()
+    @AppStorage(KeyboardShortcutSettings.Action.toggleGitChangesPanel.defaultsKey)
+    private var toggleGitChangesPanelShortcutData = Data()
     @AppStorage(KeyboardShortcutSettings.Action.splitBrowserRight.defaultsKey) private var splitBrowserRightShortcutData = Data()
     @AppStorage(KeyboardShortcutSettings.Action.splitBrowserDown.defaultsKey) private var splitBrowserDownShortcutData = Data()
     @AppStorage(KeyboardShortcutSettings.Action.renameWorkspace.defaultsKey) private var renameWorkspaceShortcutData = Data()
@@ -340,6 +343,7 @@ struct cmuxApp: App {
                 .environmentObject(notificationStore)
                 .environmentObject(sidebarState)
                 .environmentObject(sidebarSelectionState)
+                .environmentObject(rightPanelState)
                 .environmentObject(cmuxConfigStore)
                 .onAppear {
 #if DEBUG
@@ -695,6 +699,12 @@ struct cmuxApp: App {
                     }
                 }
 
+                splitCommandButton(title: String(localized: "menu.view.toggleGitChanges", defaultValue: "Toggle Git Changes"), shortcut: toggleGitChangesPanelMenuShortcut) {
+                    if AppDelegate.shared?.toggleGitChangesPanelInActiveMainWindow() != true {
+                        rightPanelState.toggle()
+                    }
+                }
+
                 Divider()
 
                 splitCommandButton(title: String(localized: "menu.view.nextSurface", defaultValue: "Next Surface"), shortcut: nextSurfaceMenuShortcut) {
@@ -950,6 +960,13 @@ struct cmuxApp: App {
         decodeShortcut(
             from: toggleReactGrabShortcutData,
             fallback: KeyboardShortcutSettings.Action.toggleReactGrab.defaultShortcut
+        )
+    }
+
+    private var toggleGitChangesPanelMenuShortcut: StoredShortcut {
+        decodeShortcut(
+            from: toggleGitChangesPanelShortcutData,
+            fallback: KeyboardShortcutSettings.Action.toggleGitChangesPanel.defaultShortcut
         )
     }
 
@@ -3894,6 +3911,170 @@ enum QuitWarningSettings {
     }
 }
 
+enum TerminalSettings {
+    static let fontFamilyKey = "terminalFontFamily"
+    static let fontSizeKey = "terminalFontSize"
+    static let themeKey = "terminalTheme"
+
+    static let defaultFontFamily = "Menlo"
+    static let defaultFontSize: Double = 12
+    static let defaultTheme = ""
+
+    static func cmuxConfigFileURL() -> URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.cmuxterm.app"
+        let dir = appSupport.appendingPathComponent(bundleId, isDirectory: true)
+        return dir.appendingPathComponent("config", isDirectory: false)
+    }
+
+    static func writeToConfigFile(fontFamily: String, fontSize: Double, theme: String) {
+        guard let url = cmuxConfigFileURL() else { return }
+        let fm = FileManager.default
+        let dir = url.deletingLastPathComponent()
+        if !fm.fileExists(atPath: dir.path) {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+
+        let managedKeys: Set<String> = ["font-family", "font-size", "theme"]
+        var preserved: [String] = []
+        if let existing = try? String(contentsOf: url, encoding: .utf8) {
+            for line in existing.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") {
+                    preserved.append(line)
+                    continue
+                }
+                let key = trimmed.components(separatedBy: "=").first?.trimmingCharacters(in: .whitespaces) ?? ""
+                if !managedKeys.contains(key) {
+                    preserved.append(line)
+                }
+            }
+        }
+
+        var managed: [String] = []
+        if fontFamily != defaultFontFamily {
+            managed.append("font-family = \(fontFamily)")
+        }
+        if fontSize != defaultFontSize {
+            managed.append("font-size = \(Int(fontSize))")
+        }
+        if !theme.isEmpty {
+            managed.append("theme = \(theme)")
+        }
+
+        var lines = preserved
+        if !managed.isEmpty {
+            if !lines.isEmpty && !(lines.last?.trimmingCharacters(in: .whitespaces).isEmpty ?? true) {
+                lines.append("")
+            }
+            lines.append(contentsOf: managed)
+        }
+
+        // Remove trailing blank lines
+        while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+            lines.removeLast()
+        }
+
+        let content = lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")
+        try? content.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    static func readFromConfigFile() -> (fontFamily: String, fontSize: Double, theme: String) {
+        guard let url = cmuxConfigFileURL(),
+              let content = try? String(contentsOf: url, encoding: .utf8) else {
+            return (defaultFontFamily, defaultFontSize, defaultTheme)
+        }
+        var family = defaultFontFamily
+        var size = defaultFontSize
+        var theme = defaultTheme
+        for line in content.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
+            let parts = trimmed.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].trimmingCharacters(in: .whitespaces)
+            let value = parts[1].trimmingCharacters(in: .whitespaces)
+            switch key {
+            case "font-family": family = value
+            case "font-size": size = Double(value) ?? defaultFontSize
+            case "theme": theme = value
+            default: break
+            }
+        }
+        return (family, size, theme)
+    }
+
+    static func bundledThemeNames() -> [String] {
+        guard let themesURL = Bundle.main.url(forResource: "ghostty/themes", withExtension: nil) else {
+            return []
+        }
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: themesURL.path) else {
+            return []
+        }
+        return contents.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    struct ThemeColors {
+        let background: NSColor?
+        let foreground: NSColor?
+        let accent1: NSColor?  // palette 1 (red)
+        let accent2: NSColor?  // palette 2 (green)
+        let accent4: NSColor?  // palette 4 (blue)
+    }
+
+    static func loadAllThemeColors() -> [String: ThemeColors] {
+        guard let themesURL = Bundle.main.url(forResource: "ghostty/themes", withExtension: nil) else {
+            return [:]
+        }
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: themesURL.path) else {
+            return [:]
+        }
+        var result: [String: ThemeColors] = [:]
+        for name in names {
+            let fileURL = themesURL.appendingPathComponent(name)
+            guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
+            var bg: String?
+            var fg: String?
+            var p1: String?
+            var p2: String?
+            var p4: String?
+            for line in content.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                let parts = trimmed.split(separator: "=", maxSplits: 1)
+                guard parts.count == 2 else { continue }
+                let key = parts[0].trimmingCharacters(in: .whitespaces)
+                let val = parts[1].trimmingCharacters(in: .whitespaces)
+                switch key {
+                case "background": bg = val
+                case "foreground": fg = val
+                case "palette":
+                    let pParts = val.split(separator: "=", maxSplits: 1)
+                    guard pParts.count == 2 else { continue }
+                    let idx = pParts[0].trimmingCharacters(in: .whitespaces)
+                    let hex = pParts[1].trimmingCharacters(in: .whitespaces)
+                    switch idx {
+                    case "1": p1 = hex
+                    case "2": p2 = hex
+                    case "4": p4 = hex
+                    default: break
+                    }
+                default: break
+                }
+            }
+            result[name] = ThemeColors(
+                background: bg.flatMap { NSColor(hex: $0) },
+                foreground: fg.flatMap { NSColor(hex: $0) },
+                accent1: p1.flatMap { NSColor(hex: $0) },
+                accent2: p2.flatMap { NSColor(hex: $0) },
+                accent4: p4.flatMap { NSColor(hex: $0) }
+            )
+        }
+        return result
+    }
+}
+
 enum CommandPaletteRenameSelectionSettings {
     static let selectAllOnFocusKey = "commandPalette.renameSelectAllOnFocus"
     static let defaultSelectAllOnFocus = true
@@ -4082,6 +4263,12 @@ struct SettingsView: View {
     @AppStorage("sidebarTintHexDark") private var sidebarTintHexDark: String?
     @AppStorage("sidebarTintOpacity") private var sidebarTintOpacity = SidebarTintDefaults.opacity
     @AppStorage("sidebarMatchTerminalBackground") private var sidebarMatchTerminalBackground = false
+    @AppStorage(TerminalSettings.fontFamilyKey) private var terminalFontFamily = TerminalSettings.defaultFontFamily
+    @AppStorage(TerminalSettings.fontSizeKey) private var terminalFontSize = TerminalSettings.defaultFontSize
+    @AppStorage(TerminalSettings.themeKey) private var terminalTheme = TerminalSettings.defaultTheme
+    @State private var terminalThemeSearchText = ""
+    @State private var allBundledThemeNames: [String] = []
+    @State private var allThemeColors: [String: TerminalSettings.ThemeColors] = [:]
 
     @ObservedObject private var notificationStore = TerminalNotificationStore.shared
     @State private var shortcutResetToken = UUID()
@@ -5074,6 +5261,72 @@ struct SettingsView: View {
                         .disabled(sidebarHideAllDetails)
                     }
 
+                    SettingsSectionHeader(title: String(localized: "settings.section.terminal", defaultValue: "Terminal"))
+                    SettingsCard {
+                        SettingsCardRow(
+                            String(localized: "settings.terminal.fontFamily", defaultValue: "Font Family"),
+                            subtitle: String(localized: "settings.terminal.fontFamily.subtitle", defaultValue: "Monospace font used in terminal panes.")
+                        ) {
+                            TextField(
+                                String(localized: "settings.terminal.fontFamily.placeholder", defaultValue: "e.g. Menlo"),
+                                text: $terminalFontFamily
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                            .frame(width: 160)
+                            .onSubmit { saveTerminalSettings() }
+                        }
+
+                        SettingsCardDivider()
+
+                        SettingsCardRow(
+                            String(localized: "settings.terminal.fontSize", defaultValue: "Font Size"),
+                            subtitle: String(localized: "settings.terminal.fontSize.subtitle", defaultValue: "Font size in points (6–72).")
+                        ) {
+                            HStack(spacing: 6) {
+                                Text("\(Int(terminalFontSize)) pt")
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                Stepper(
+                                    "",
+                                    value: $terminalFontSize,
+                                    in: 6...72,
+                                    step: 1
+                                )
+                                .labelsHidden()
+                                .controlSize(.small)
+                                .onChange(of: terminalFontSize) { _ in saveTerminalSettings() }
+                            }
+                        }
+
+                        SettingsCardDivider()
+
+                        SettingsCardRow(
+                            String(localized: "settings.terminal.theme", defaultValue: "Terminal Color Theme"),
+                            subtitle: String(localized: "settings.terminal.theme.subtitle", defaultValue: "Built-in Ghostty color theme. Leave default to use system colors.")
+                        ) {
+                            TerminalThemePickerButton(
+                                selectedTheme: terminalTheme,
+                                themes: allBundledThemeNames,
+                                themeColors: allThemeColors,
+                                searchText: $terminalThemeSearchText
+                            ) { theme in
+                                terminalTheme = theme
+                                saveTerminalSettings()
+                            }
+                        }
+                    }
+                    .onAppear {
+                        if allBundledThemeNames.isEmpty {
+                            allBundledThemeNames = TerminalSettings.bundledThemeNames()
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                let colors = TerminalSettings.loadAllThemeColors()
+                                DispatchQueue.main.async { allThemeColors = colors }
+                            }
+                        }
+                        syncTerminalSettingsFromConfig()
+                    }
+
                     SettingsSectionHeader(title: String(localized: "settings.section.workspaceColors", defaultValue: "Workspace Colors"))
                     SettingsCard {
                         SettingsPickerRow(
@@ -6030,6 +6283,10 @@ struct SettingsView: View {
         sidebarTintHexDark = nil
         sidebarTintOpacity = SidebarTintDefaults.opacity
         sidebarMatchTerminalBackground = false
+        terminalFontFamily = TerminalSettings.defaultFontFamily
+        terminalFontSize = TerminalSettings.defaultFontSize
+        terminalTheme = TerminalSettings.defaultTheme
+        saveTerminalSettings()
         showOpenAccessConfirmation = false
         pendingOpenAccessMode = nil
         socketPasswordDraft = ""
@@ -6041,6 +6298,23 @@ struct SettingsView: View {
         reloadWorkspaceTabColorSettings()
         shortcutResetToken = UUID()
         DispatchQueue.main.async { isResettingSettings = false }
+    }
+
+    private func saveTerminalSettings() {
+        TerminalSettings.writeToConfigFile(
+            fontFamily: terminalFontFamily,
+            fontSize: terminalFontSize,
+            theme: terminalTheme
+        )
+        GhosttyConfig.invalidateLoadCache()
+        GhosttyApp.shared.reloadConfiguration(source: "settings.terminal")
+    }
+
+    private func syncTerminalSettingsFromConfig() {
+        let values = TerminalSettings.readFromConfigFile()
+        if terminalFontFamily != values.fontFamily { terminalFontFamily = values.fontFamily }
+        if terminalFontSize != values.fontSize { terminalFontSize = values.fontSize }
+        if terminalTheme != values.theme { terminalTheme = values.theme }
     }
 
     private func defaultTabColorBinding(for name: String) -> Binding<Color> {
@@ -6290,6 +6564,219 @@ private struct SettingsCardNote: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct TerminalThemePickerButton: View {
+    let selectedTheme: String
+    let themes: [String]
+    let themeColors: [String: TerminalSettings.ThemeColors]
+    @Binding var searchText: String
+    let onSelect: (String) -> Void
+
+    @State private var showPopover = false
+
+    private static let popularThemeNames: [String] = [
+        "Dracula",
+        "Catppuccin Mocha",
+        "Catppuccin Latte",
+        "Tokyo Night",
+        "Tokyo Night Storm",
+        "Gruvbox Dark",
+        "Gruvbox Light",
+        "Nord",
+        "One Dark",
+        "One Light",
+        "Solarized Dark",
+        "Solarized Light",
+        "Monokai Pro",
+        "Monokai Remastered",
+        "Everforest Dark Hard",
+        "Everforest Light Hard",
+        "Kanagawa Wave",
+        "Rose Pine",
+        "Rose Pine Moon",
+        "Rose Pine Dawn",
+        "GitHub Dark",
+        "GitHub Light",
+        "Ayu Dark",
+        "Ayu Light",
+        "Material",
+        "Material Dark",
+        "Snazzy",
+        "Nightfox",
+        "Atom One Dark",
+        "Atom One Light",
+    ]
+
+    private var displayLabel: String {
+        selectedTheme.isEmpty
+            ? String(localized: "settings.terminal.theme.default", defaultValue: "Default")
+            : selectedTheme
+    }
+
+    private var isSearching: Bool { !searchText.isEmpty }
+
+    private var filteredThemes: [String] {
+        if searchText.isEmpty { return themes }
+        return themes.filter { $0.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    private var popularThemes: [String] {
+        Self.popularThemeNames.filter { name in
+            themes.contains(name)
+        }
+    }
+
+    private var filteredPopularThemes: [String] {
+        if searchText.isEmpty { return popularThemes }
+        return popularThemes.filter { $0.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    private var filteredRemainingThemes: [String] {
+        let popularSet = Set(Self.popularThemeNames)
+        let remaining = filteredThemes.filter { !popularSet.contains($0) }
+        return remaining
+    }
+
+    var body: some View {
+        Button(action: { showPopover.toggle() }) {
+            HStack(spacing: 4) {
+                if let colors = themeColors[selectedTheme] {
+                    themeSwatches(colors)
+                }
+                Text(displayLabel)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: NSColor.controlBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color(nsColor: NSColor.separatorColor), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
+            VStack(spacing: 0) {
+                TextField(
+                    String(localized: "settings.terminal.theme.search", defaultValue: "Search themes…"),
+                    text: $searchText
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+                .padding(8)
+
+                Divider()
+
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        themeRow(
+                            label: String(localized: "settings.terminal.theme.default", defaultValue: "Default"),
+                            value: "",
+                            colors: nil
+                        )
+
+                        if !filteredPopularThemes.isEmpty {
+                            sectionHeader(String(localized: "settings.terminal.theme.popular", defaultValue: "Popular"))
+                            ForEach(filteredPopularThemes, id: \.self) { theme in
+                                themeRow(label: theme, value: theme, colors: themeColors[theme])
+                            }
+                        }
+
+                        if !filteredRemainingThemes.isEmpty {
+                            sectionHeader(String(localized: "settings.terminal.theme.allThemes", defaultValue: "All Themes"))
+                            ForEach(filteredRemainingThemes, id: \.self) { theme in
+                                themeRow(label: theme, value: theme, colors: themeColors[theme])
+                            }
+                        }
+                    }
+                }
+                .frame(width: 300, height: 300)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 3)
+    }
+
+    @ViewBuilder
+    private func themeSwatches(_ colors: TerminalSettings.ThemeColors) -> some View {
+        HStack(spacing: -2) {
+            if let bg = colors.background {
+                Circle()
+                    .fill(Color(nsColor: bg))
+                    .overlay(Circle().stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+                    .frame(width: 10, height: 10)
+            }
+            if let fg = colors.foreground {
+                Circle()
+                    .fill(Color(nsColor: fg))
+                    .overlay(Circle().stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+                    .frame(width: 10, height: 10)
+            }
+            if let c1 = colors.accent1 {
+                Circle()
+                    .fill(Color(nsColor: c1))
+                    .overlay(Circle().stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+                    .frame(width: 10, height: 10)
+            }
+            if let c2 = colors.accent2 {
+                Circle()
+                    .fill(Color(nsColor: c2))
+                    .overlay(Circle().stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+                    .frame(width: 10, height: 10)
+            }
+            if let c4 = colors.accent4 {
+                Circle()
+                    .fill(Color(nsColor: c4))
+                    .overlay(Circle().stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+                    .frame(width: 10, height: 10)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func themeRow(label: String, value: String, colors: TerminalSettings.ThemeColors?) -> some View {
+        Button(action: {
+            onSelect(value)
+            showPopover = false
+            searchText = ""
+        }) {
+            HStack(spacing: 6) {
+                if let colors {
+                    themeSwatches(colors)
+                        .frame(width: 42, alignment: .leading)
+                }
+                Text(label)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                Spacer()
+                if selectedTheme == value {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.accentColor)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -1574,8 +1574,12 @@ struct ContentView: View {
     @EnvironmentObject var notificationStore: TerminalNotificationStore
     @EnvironmentObject var sidebarState: SidebarState
     @EnvironmentObject var sidebarSelectionState: SidebarSelectionState
+    @EnvironmentObject var rightPanelState: RightPanelState
     @EnvironmentObject var cmuxConfigStore: CmuxConfigStore
+    @StateObject private var gitChangesService = GitChangesService()
     @State private var sidebarWidth: CGFloat = 200
+    @State private var rightPanelWidth: CGFloat = 300
+    @State private var rightPanelDragStartWidth: CGFloat?
     @State private var hoveredResizerHandles: Set<SidebarResizerHandle> = []
     @State private var isResizerDragging = false
     @State private var sidebarDragStartWidth: CGFloat?
@@ -2626,6 +2630,76 @@ struct ContentView: View {
         return dir.isEmpty ? nil : dir
     }
 
+    private var rightPanelDirectory: String? {
+        guard let tab = tabManager.selectedWorkspace else { return nil }
+        let dir = tab.currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        return dir.isEmpty ? nil : dir
+    }
+
+    private var rightPanelView: some View {
+        GitChangesPanel(
+            gitService: gitChangesService,
+            directory: rightPanelDirectory,
+            onRefresh: { [weak gitChangesService] in
+                guard let service = gitChangesService, let dir = rightPanelDirectory else { return }
+                service.forceRefresh(directory: dir)
+            }
+        )
+        .frame(width: rightPanelWidth)
+        .frame(maxHeight: .infinity)
+    }
+
+    private var rightPanelResizerOverlay: some View {
+        GeometryReader { proxy in
+            let totalWidth = max(0, proxy.size.width)
+            let rpWidth = rightPanelState.isVisible ? rightPanelWidth : 0
+            let dividerX = max(0, totalWidth - rpWidth)
+
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: max(0, dividerX - SidebarResizeInteraction.contentSideHitWidth))
+                    .allowsHitTesting(false)
+
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: SidebarResizeInteraction.totalHitWidth)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                let startWidth = rightPanelDragStartWidth ?? rightPanelWidth
+                                if rightPanelDragStartWidth == nil {
+                                    rightPanelDragStartWidth = rightPanelWidth
+                                }
+                                let nextWidth = min(
+                                    max(startWidth - value.translation.width, CGFloat(SessionPersistencePolicy.minimumRightPanelWidth)),
+                                    CGFloat(SessionPersistencePolicy.maximumRightPanelWidth)
+                                )
+                                withTransaction(Transaction(animation: nil)) {
+                                    rightPanelWidth = nextWidth
+                                }
+                            }
+                            .onEnded { _ in
+                                rightPanelDragStartWidth = nil
+                                rightPanelState.persistedWidth = rightPanelWidth
+                            }
+                    )
+
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .allowsHitTesting(false)
+            }
+            .frame(width: totalWidth, height: proxy.size.height, alignment: .leading)
+        }
+    }
+
     private var contentAndSidebarLayout: AnyView {
         let layout: AnyView
         // When matching terminal background, use HStack so both sidebar and terminal
@@ -2639,8 +2713,14 @@ struct ContentView: View {
                 ZStack(alignment: .leading) {
                     terminalContentWithSidebarDropOverlay
                         .padding(.leading, sidebarState.isVisible ? sidebarWidth : 0)
+                        .padding(.trailing, rightPanelState.isVisible ? rightPanelWidth : 0)
                     if sidebarState.isVisible {
                         sidebarView
+                    }
+                }
+                .overlay(alignment: .trailing) {
+                    if rightPanelState.isVisible {
+                        rightPanelView
                     }
                 }
             )
@@ -2652,6 +2732,9 @@ struct ContentView: View {
                         sidebarView
                     }
                     terminalContentWithSidebarDropOverlay
+                    if rightPanelState.isVisible {
+                        rightPanelView
+                    }
                 }
             )
         }
@@ -2661,6 +2744,12 @@ struct ContentView: View {
                 .overlay(alignment: .leading) {
                     if sidebarState.isVisible {
                         sidebarResizerOverlay
+                            .zIndex(1000)
+                    }
+                }
+                .overlay {
+                    if rightPanelState.isVisible {
+                        rightPanelResizerOverlay
                             .zIndex(1000)
                     }
                 }
@@ -2693,6 +2782,10 @@ struct ContentView: View {
             }
             if abs(sidebarState.persistedWidth - restoredWidth) > 0.5 {
                 sidebarState.persistedWidth = restoredWidth
+            }
+            let restoredRightPanelWidth = CGFloat(SessionPersistencePolicy.sanitizedRightPanelWidth(Double(rightPanelState.persistedWidth)))
+            if abs(rightPanelWidth - restoredRightPanelWidth) > 0.5 {
+                rightPanelWidth = restoredRightPanelWidth
             }
             if selectedTabIds.isEmpty, let selectedId = tabManager.selectedTabId {
                 selectedTabIds = [selectedId]
@@ -3234,10 +3327,24 @@ struct ContentView: View {
                 windowId: windowId,
                 tabManager: tabManager,
                 sidebarState: sidebarState,
-                sidebarSelectionState: sidebarSelectionState
+                sidebarSelectionState: sidebarSelectionState,
+                rightPanelState: rightPanelState
             )
             installFileDropOverlay(on: window, tabManager: tabManager)
         }))
+
+        view = AnyView(view
+            .onChange(of: rightPanelState.isVisible) {
+                if rightPanelState.isVisible, let dir = rightPanelDirectory {
+                    gitChangesService.forceRefresh(directory: dir)
+                }
+            }
+            .onChange(of: tabManager.selectedTabId) {
+                if rightPanelState.isVisible, let dir = rightPanelDirectory {
+                    gitChangesService.refresh(directory: dir)
+                }
+            }
+        )
 
         return view
     }
@@ -11163,20 +11270,8 @@ private func groupedTabs(_ tabs: [Workspace]) -> [SidebarTabGroup] {
 }
 
 private func abbreviatedPath(_ path: String) -> String {
-    var result = path
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    if result.hasPrefix(home) {
-        result = "~" + String(result.dropFirst(home.count))
-    }
-    let components = result.split(separator: "/", omittingEmptySubsequences: true)
-    if components.count > 2 {
-        let last2 = components.suffix(2).joined(separator: "/")
-        if result.hasPrefix("~") {
-            return "~/.../\(last2)"
-        }
-        return "/.../\(last2)"
-    }
-    return result
+    let url = URL(fileURLWithPath: path)
+    return url.lastPathComponent
 }
 
 private struct SidebarBookmarkHeader: View {

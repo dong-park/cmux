@@ -380,7 +380,8 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
                 windowId: orphanWindowId,
                 tabManager: orphanManager,
                 sidebarState: orphanSidebarState,
-                sidebarSelectionState: orphanSidebarSelectionState
+                sidebarSelectionState: orphanSidebarSelectionState,
+                rightPanelState: RightPanelState()
             )
             orphanWindow = nil
         }
@@ -423,7 +424,8 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
                 windowId: orphanWindowId,
                 tabManager: orphanManager,
                 sidebarState: orphanSidebarState,
-                sidebarSelectionState: orphanSidebarSelectionState
+                sidebarSelectionState: orphanSidebarSelectionState,
+                rightPanelState: RightPanelState()
             )
             orphanWindow = nil
         }

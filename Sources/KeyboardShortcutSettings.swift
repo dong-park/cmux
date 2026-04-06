@@ -47,6 +47,7 @@ enum KeyboardShortcutSettings {
         case toggleBrowserDeveloperTools
         case showBrowserJavaScriptConsole
         case toggleReactGrab
+        case toggleGitChangesPanel
 
         var id: String { rawValue }
 
@@ -85,6 +86,7 @@ enum KeyboardShortcutSettings {
             case .toggleBrowserDeveloperTools: return String(localized: "shortcut.toggleBrowserDevTools.label", defaultValue: "Toggle Browser Developer Tools")
             case .showBrowserJavaScriptConsole: return String(localized: "shortcut.showBrowserJSConsole.label", defaultValue: "Show Browser JavaScript Console")
             case .toggleReactGrab: return String(localized: "shortcut.toggleReactGrab.label", defaultValue: "Toggle React Grab")
+            case .toggleGitChangesPanel: return String(localized: "shortcut.toggleGitChanges.label", defaultValue: "Toggle Git Changes")
             }
         }
 
@@ -123,6 +125,7 @@ enum KeyboardShortcutSettings {
             case .toggleBrowserDeveloperTools: return "shortcut.toggleBrowserDeveloperTools"
             case .showBrowserJavaScriptConsole: return "shortcut.showBrowserJavaScriptConsole"
             case .toggleReactGrab: return "shortcut.toggleReactGrab"
+            case .toggleGitChangesPanel: return "shortcut.toggleGitChangesPanel"
             }
         }
 
@@ -196,6 +199,8 @@ enum KeyboardShortcutSettings {
                 return StoredShortcut(key: "c", command: true, shift: false, option: true, control: false)
             case .toggleReactGrab:
                 return StoredShortcut(key: "g", command: true, shift: true, option: false, control: false)
+            case .toggleGitChangesPanel:
+                return StoredShortcut(key: "g", command: true, shift: false, option: true, control: false)
             }
         }
 
