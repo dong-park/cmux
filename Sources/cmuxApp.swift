@@ -3914,10 +3914,12 @@ enum QuitWarningSettings {
 enum TerminalSettings {
     static let fontFamilyKey = "terminalFontFamily"
     static let fontSizeKey = "terminalFontSize"
+    static let fontStyleKey = "terminalFontStyle"
     static let themeKey = "terminalTheme"
 
     static let defaultFontFamily = "Menlo"
     static let defaultFontSize: Double = 12
+    static let defaultFontStyle = ""
     static let defaultTheme = ""
 
     static func cmuxConfigFileURL() -> URL? {
@@ -3929,7 +3931,7 @@ enum TerminalSettings {
         return dir.appendingPathComponent("config", isDirectory: false)
     }
 
-    static func writeToConfigFile(fontFamily: String, fontSize: Double, theme: String) {
+    static func writeToConfigFile(fontFamily: String, fontSize: Double, fontStyle: String, theme: String) {
         guard let url = cmuxConfigFileURL() else { return }
         let fm = FileManager.default
         let dir = url.deletingLastPathComponent()
@@ -3937,7 +3939,7 @@ enum TerminalSettings {
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
 
-        let managedKeys: Set<String> = ["font-family", "font-size", "theme"]
+        let managedKeys: Set<String> = ["font-family", "font-size", "font-style", "theme"]
         var preserved: [String] = []
         if let existing = try? String(contentsOf: url, encoding: .utf8) {
             for line in existing.components(separatedBy: .newlines) {
@@ -3960,6 +3962,9 @@ enum TerminalSettings {
         if fontSize != defaultFontSize {
             managed.append("font-size = \(Int(fontSize))")
         }
+        if !fontStyle.isEmpty {
+            managed.append("font-style = \(fontStyle)")
+        }
         if !theme.isEmpty {
             managed.append("theme = \(theme)")
         }
@@ -3981,13 +3986,14 @@ enum TerminalSettings {
         try? content.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    static func readFromConfigFile() -> (fontFamily: String, fontSize: Double, theme: String) {
+    static func readFromConfigFile() -> (fontFamily: String, fontSize: Double, fontStyle: String, theme: String) {
         guard let url = cmuxConfigFileURL(),
               let content = try? String(contentsOf: url, encoding: .utf8) else {
-            return (defaultFontFamily, defaultFontSize, defaultTheme)
+            return (defaultFontFamily, defaultFontSize, defaultFontStyle, defaultTheme)
         }
         var family = defaultFontFamily
         var size = defaultFontSize
+        var fontStyle = defaultFontStyle
         var theme = defaultTheme
         for line in content.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -3999,11 +4005,12 @@ enum TerminalSettings {
             switch key {
             case "font-family": family = value
             case "font-size": size = Double(value) ?? defaultFontSize
+            case "font-style": fontStyle = value
             case "theme": theme = value
             default: break
             }
         }
-        return (family, size, theme)
+        return (family, size, fontStyle, theme)
     }
 
     static func bundledThemeNames() -> [String] {
@@ -4265,6 +4272,7 @@ struct SettingsView: View {
     @AppStorage("sidebarMatchTerminalBackground") private var sidebarMatchTerminalBackground = false
     @AppStorage(TerminalSettings.fontFamilyKey) private var terminalFontFamily = TerminalSettings.defaultFontFamily
     @AppStorage(TerminalSettings.fontSizeKey) private var terminalFontSize = TerminalSettings.defaultFontSize
+    @AppStorage(TerminalSettings.fontStyleKey) private var terminalFontStyle = TerminalSettings.defaultFontStyle
     @AppStorage(TerminalSettings.themeKey) private var terminalTheme = TerminalSettings.defaultTheme
     @State private var terminalThemeSearchText = ""
     @State private var allBundledThemeNames: [String] = []
@@ -5302,6 +5310,29 @@ struct SettingsView: View {
                         SettingsCardDivider()
 
                         SettingsCardRow(
+                            String(localized: "settings.terminal.fontStyle", defaultValue: "Font Weight"),
+                            subtitle: String(localized: "settings.terminal.fontStyle.subtitle", defaultValue: "Base font style for terminal text. Depends on available styles in the selected font.")
+                        ) {
+                            Picker("", selection: $terminalFontStyle) {
+                                Text("Default").tag("")
+                                Text("Thin").tag("Thin")
+                                Text("Light").tag("Light")
+                                Text("Regular").tag("Regular")
+                                Text("Medium").tag("Medium")
+                                Text("SemiBold").tag("SemiBold")
+                                Text("Bold").tag("Bold")
+                                Text("ExtraBold").tag("ExtraBold")
+                                Text("Black").tag("Black")
+                            }
+                            .labelsHidden()
+                            .controlSize(.small)
+                            .frame(width: 120)
+                            .onChange(of: terminalFontStyle) { _ in saveTerminalSettings() }
+                        }
+
+                        SettingsCardDivider()
+
+                        SettingsCardRow(
                             String(localized: "settings.terminal.theme", defaultValue: "Terminal Color Theme"),
                             subtitle: String(localized: "settings.terminal.theme.subtitle", defaultValue: "Built-in Ghostty color theme. Leave default to use system colors.")
                         ) {
@@ -6304,6 +6335,7 @@ struct SettingsView: View {
         TerminalSettings.writeToConfigFile(
             fontFamily: terminalFontFamily,
             fontSize: terminalFontSize,
+            fontStyle: terminalFontStyle,
             theme: terminalTheme
         )
         GhosttyConfig.invalidateLoadCache()
@@ -6314,6 +6346,7 @@ struct SettingsView: View {
         let values = TerminalSettings.readFromConfigFile()
         if terminalFontFamily != values.fontFamily { terminalFontFamily = values.fontFamily }
         if terminalFontSize != values.fontSize { terminalFontSize = values.fontSize }
+        if terminalFontStyle != values.fontStyle { terminalFontStyle = values.fontStyle }
         if terminalTheme != values.theme { terminalTheme = values.theme }
     }
 

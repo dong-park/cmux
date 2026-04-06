@@ -63311,6 +63311,52 @@
         }
       }
     },
+    "settings.terminal.fontStyle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Font Weight"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォントウェイト"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "글꼴 두께"
+          }
+        }
+      }
+    },
+    "settings.terminal.fontStyle.subtitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Base font style for terminal text. Depends on available styles in the selected font."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ターミナルテキストの基本フォントスタイル。選択したフォントで利用可能なスタイルに依存します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "터미널 텍스트의 기본 글꼴 스타일. 선택한 글꼴에서 사용 가능한 스타일에 따라 다릅니다."
+          }
+        }
+      }
+    },
     "settings.terminal.theme": {
       "extractionState": "manual",
       "localizations": {
