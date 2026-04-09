@@ -9222,18 +9222,6 @@ enum ShortcutHintDebugSettings {
     }
 }
 
-enum DevBuildBannerDebugSettings {
-    static let sidebarBannerVisibleKey = "showSidebarDevBuildBanner"
-    static let defaultShowSidebarBanner = true
-
-    static func showSidebarBanner(defaults: UserDefaults = .standard) -> Bool {
-        guard defaults.object(forKey: sidebarBannerVisibleKey) != nil else {
-            return defaultShowSidebarBanner
-        }
-        return defaults.bool(forKey: sidebarBannerVisibleKey)
-    }
-}
-
 private enum FeedbackComposerSettings {
     static let storedEmailKey = "sidebarHelpFeedbackEmail"
     static let endpointEnvironmentKey = "CMUX_FEEDBACK_API_URL"
@@ -11158,18 +11146,9 @@ private struct SidebarFooterIconButtonStyleBody: View {
 private struct SidebarDevFooter: View {
     @ObservedObject var updateViewModel: UpdateViewModel
     let onSendFeedback: () -> Void
-    @AppStorage(DevBuildBannerDebugSettings.sidebarBannerVisibleKey)
-    private var showSidebarDevBuildBanner = DevBuildBannerDebugSettings.defaultShowSidebarBanner
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SidebarFooterButtons(updateViewModel: updateViewModel, onSendFeedback: onSendFeedback)
-            if showSidebarDevBuildBanner {
-                Text(String(localized: "debug.devBuildBanner.title", defaultValue: "THIS IS A DEV BUILD"))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.red)
-            }
-        }
+        SidebarFooterButtons(updateViewModel: updateViewModel, onSendFeedback: onSendFeedback)
         .padding(.leading, 6)
         .padding(.trailing, 10)
         .padding(.bottom, 6)

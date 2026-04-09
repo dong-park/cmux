@@ -1,8 +1,34 @@
 import Sparkle
 import Cocoa
 
+enum UpdateRepositoryMetadata {
+    static let defaultGitHubRepository = "dong-park/cmux"
+
+    static var githubRepository: String {
+        if let repository = Bundle.main.object(forInfoDictionaryKey: "CMUXGitHubRepository") as? String,
+           !repository.isEmpty {
+            return repository
+        }
+        return defaultGitHubRepository
+    }
+
+    static var stableFeedURL: String {
+        "https://github.com/\(githubRepository)/releases/latest/download/appcast.xml"
+    }
+
+    static func releaseTagURL(_ tag: String) -> URL? {
+        URL(string: "https://github.com/\(githubRepository)/releases/tag/\(tag)")
+    }
+
+    static func commitURL(_ hash: String) -> URL? {
+        URL(string: "https://github.com/\(githubRepository)/commit/\(hash)")
+    }
+}
+
 enum UpdateFeedResolver {
-    static let fallbackFeedURL = "https://github.com/manaflow-ai/cmux/releases/latest/download/appcast.xml"
+    static var fallbackFeedURL: String {
+        UpdateRepositoryMetadata.stableFeedURL
+    }
 
     static func resolvedFeedURLString(infoFeedURL: String?) -> (url: String, isNightly: Bool, usedFallback: Bool) {
         guard let infoFeedURL, !infoFeedURL.isEmpty else {

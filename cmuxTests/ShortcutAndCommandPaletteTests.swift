@@ -758,37 +758,6 @@ final class ShortcutHintDebugSettingsTests: XCTestCase {
     }
 }
 
-
-final class DevBuildBannerDebugSettingsTests: XCTestCase {
-    func testShowSidebarBannerDefaultsToVisible() {
-        let suiteName = "DevBuildBannerDebugSettingsTests.Default.\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suiteName) else {
-            XCTFail("Failed to create isolated UserDefaults suite")
-            return
-        }
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        defaults.removeObject(forKey: DevBuildBannerDebugSettings.sidebarBannerVisibleKey)
-        XCTAssertTrue(DevBuildBannerDebugSettings.showSidebarBanner(defaults: defaults))
-    }
-
-    func testShowSidebarBannerRespectsStoredValue() {
-        let suiteName = "DevBuildBannerDebugSettingsTests.Stored.\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suiteName) else {
-            XCTFail("Failed to create isolated UserDefaults suite")
-            return
-        }
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        defaults.set(false, forKey: DevBuildBannerDebugSettings.sidebarBannerVisibleKey)
-        XCTAssertFalse(DevBuildBannerDebugSettings.showSidebarBanner(defaults: defaults))
-
-        defaults.set(true, forKey: DevBuildBannerDebugSettings.sidebarBannerVisibleKey)
-        XCTAssertTrue(DevBuildBannerDebugSettings.showSidebarBanner(defaults: defaults))
-    }
-}
-
-
 final class ShortcutHintLanePlannerTests: XCTestCase {
     func testAssignLanesKeepsSeparatedIntervalsOnSingleLane() {
         let intervals: [ClosedRange<CGFloat>] = [0...20, 28...40, 48...64]
@@ -943,6 +912,30 @@ final class UpdateChannelSettingsTests: XCTestCase {
         XCTAssertEqual(resolved.url, "https://example.com/nightly/appcast.xml")
         XCTAssertTrue(resolved.isNightly)
         XCTAssertFalse(resolved.usedFallback)
+    }
+
+    func testReleaseNotesTaggedURLUsesForkRepository() {
+        guard let notes = UpdateState.ReleaseNotes(displayVersionString: "0.62.0") else {
+            XCTFail("Expected release notes URL for semver version")
+            return
+        }
+
+        XCTAssertEqual(
+            notes.url.absoluteString,
+            "https://github.com/dong-park/cmux/releases/tag/v0.62.0"
+        )
+    }
+
+    func testReleaseNotesCommitURLUsesForkRepository() {
+        guard let notes = UpdateState.ReleaseNotes(displayVersionString: "0.62.0-nightly+abc1234") else {
+            XCTFail("Expected release notes URL for nightly hash")
+            return
+        }
+
+        XCTAssertEqual(
+            notes.url.absoluteString,
+            "https://github.com/dong-park/cmux/commit/abc1234"
+        )
     }
 }
 
