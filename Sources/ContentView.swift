@@ -5184,6 +5184,8 @@ struct ContentView: View {
             return String(localized: "commandPalette.kind.browser", defaultValue: "Browser")
         case .markdown:
             return String(localized: "commandPalette.kind.markdown", defaultValue: "Markdown")
+        case .memo:
+            return String(localized: "commandPalette.kind.memo", defaultValue: "Memo")
         }
     }
 
@@ -5195,6 +5197,8 @@ struct ContentView: View {
             return ["browser", "web", "page"]
         case .markdown:
             return ["markdown", "note", "preview"]
+        case .memo:
+            return ["memo", "note", "notepad"]
         }
     }
 
@@ -10029,6 +10033,8 @@ private struct FeedbackComposerMessageEditor: NSViewRepresentable {
     let placeholder: String
     let accessibilityLabel: String
     let accessibilityIdentifier: String
+    var onBeganEditing: (() -> Void)? = nil
+    var onEndedEditing: ((String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -10065,6 +10071,18 @@ private struct FeedbackComposerMessageEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            parent.onBeganEditing?()
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else {
+                parent.onEndedEditing?(parent.text)
+                return
+            }
+            parent.onEndedEditing?(textView.string)
         }
     }
 }
@@ -11437,10 +11455,13 @@ enum SidebarWorkspaceShortcutHintMetrics {
 }
 
 enum SidebarTrailingAccessoryWidthPolicy {
+    static let memoButtonWidth: CGFloat = 16
     static let closeButtonWidth: CGFloat = 16
+    static let buttonSpacing: CGFloat = 4
 
     static func width(
-        canCloseWorkspace: Bool,
+        showsMemoButton: Bool,
+        showsCloseButton: Bool,
         showsWorkspaceShortcutHint: Bool,
         workspaceShortcutLabel: String?,
         debugXOffset: Double
@@ -11452,7 +11473,17 @@ enum SidebarTrailingAccessoryWidthPolicy {
             )
         }
 
-        return canCloseWorkspace ? closeButtonWidth : 0
+        var width: CGFloat = 0
+        if showsMemoButton {
+            width += memoButtonWidth
+        }
+        if showsCloseButton {
+            if width > 0 {
+                width += buttonSpacing
+            }
+            width += closeButtonWidth
+        }
+        return width
     }
 }
 
@@ -11674,6 +11705,10 @@ private struct TabItemView: View, Equatable {
         isHovering && canCloseWorkspace && !(showsModifierShortcutHints || alwaysShowShortcutHints)
     }
 
+    private var showMemoButton: Bool {
+        visibleMemoText != nil || (isHovering && !(showsModifierShortcutHints || alwaysShowShortcutHints))
+    }
+
     private var workspaceShortcutLabel: String? {
         guard let workspaceShortcutDigit else { return nil }
         return "\(workspaceShortcutModifierSymbol)\(workspaceShortcutDigit)"
@@ -11685,7 +11720,8 @@ private struct TabItemView: View, Equatable {
 
     private var trailingAccessoryWidth: CGFloat {
         SidebarTrailingAccessoryWidthPolicy.width(
-            canCloseWorkspace: canCloseWorkspace,
+            showsMemoButton: showMemoButton,
+            showsCloseButton: showCloseButton,
             showsWorkspaceShortcutHint: showsWorkspaceShortcutHint,
             workspaceShortcutLabel: workspaceShortcutLabel,
             debugXOffset: sidebarShortcutHintXOffset
@@ -11741,6 +11777,14 @@ private struct TabItemView: View, Equatable {
         }
     }
 
+    private var visibleMemoText: String? {
+        guard let memo = tab.memo,
+              !memo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return memo
+    }
+
     @ViewBuilder
     private var remoteWorkspaceSection: some View {
         if sidebarShowSSH, let remoteWorkspaceSidebarText {
@@ -11782,6 +11826,7 @@ private struct TabItemView: View, Equatable {
             localized: "sidebar.pinnedWorkspaceProtected.tooltip",
             defaultValue: "Pinned workspace. Closing requires confirmation."
         )
+        let openMemoTooltip = String(localized: "workspace.memo.open", defaultValue: "Open Memo")
         let closeButtonTooltip = tab.isPinned
             ? protectedWorkspaceTooltip
             : KeyboardShortcutSettings.Action.closeWorkspace.tooltip(closeWorkspaceTooltip)
@@ -11862,21 +11907,45 @@ private struct TabItemView: View, Equatable {
                 Spacer(minLength: 0)
 
                 ZStack(alignment: .trailing) {
-                    Button(action: {
-                        #if DEBUG
-                        dlog("sidebar.close workspace=\(tab.id.uuidString.prefix(5)) method=button")
-                        #endif
-                        tabManager.closeWorkspaceWithConfirmation(tab)
-                    }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(activeSecondaryColor(0.7))
+                    if !showsWorkspaceShortcutHint {
+                        HStack(spacing: SidebarTrailingAccessoryWidthPolicy.buttonSpacing) {
+                            if showMemoButton {
+                                Button(action: openMemoSurface) {
+                                    Image(systemName: visibleMemoText == nil ? "note.text.badge.plus" : "note.text")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(activeSecondaryColor(0.7))
+                                }
+                                .buttonStyle(.plain)
+                                .safeHelp(openMemoTooltip)
+                                .accessibilityLabel(Text(openMemoTooltip))
+                                .frame(
+                                    width: SidebarTrailingAccessoryWidthPolicy.memoButtonWidth,
+                                    height: 16,
+                                    alignment: .center
+                                )
+                            }
+
+                            if showCloseButton {
+                                Button(action: {
+                                    #if DEBUG
+                                    dlog("sidebar.close workspace=\(tab.id.uuidString.prefix(5)) method=button")
+                                    #endif
+                                    tabManager.closeWorkspaceWithConfirmation(tab)
+                                }) {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundColor(activeSecondaryColor(0.7))
+                                }
+                                .buttonStyle(.plain)
+                                .safeHelp(closeButtonTooltip)
+                                .frame(
+                                    width: SidebarTrailingAccessoryWidthPolicy.closeButtonWidth,
+                                    height: 16,
+                                    alignment: .center
+                                )
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .safeHelp(closeButtonTooltip)
-                    .frame(width: SidebarTrailingAccessoryWidthPolicy.closeButtonWidth, height: 16, alignment: .center)
-                    .opacity(showCloseButton && !showsWorkspaceShortcutHint ? 1 : 0)
-                    .allowsHitTesting(showCloseButton && !showsWorkspaceShortcutHint)
 
                     if showsWorkspaceShortcutHint, let workspaceShortcutLabel {
                         Text(workspaceShortcutLabel)
@@ -11931,10 +12000,12 @@ private struct TabItemView: View, Equatable {
                     }
                 }
             }
+
         }
         .animation(.easeInOut(duration: 0.2), value: tab.logEntries.count)
         .animation(.easeInOut(duration: 0.2), value: tab.progress != nil)
         .animation(.easeInOut(duration: 0.2), value: tab.metadataBlocks.count)
+        .animation(.easeInOut(duration: 0.2), value: tab.memo ?? "")
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
@@ -12110,6 +12181,12 @@ private struct TabItemView: View, Equatable {
         if tab.hasCustomTitle {
             Button(String(localized: "contextMenu.removeCustomWorkspaceName", defaultValue: "Remove Custom Workspace Name")) {
                 tabManager.clearCustomTitle(tabId: tab.id)
+            }
+        }
+
+        if !isMulti {
+            Button(String(localized: "workspace.memo.open", defaultValue: "Open Memo")) {
+                openMemoSurface()
             }
         }
 
@@ -12379,6 +12456,13 @@ private struct TabItemView: View, Equatable {
             )
         }
         setSelectionToTabs()
+    }
+
+    private func openMemoSurface() {
+        selectedTabIds = [tab.id]
+        lastSidebarSelectionIndex = index
+        setSelectionToTabs()
+        _ = tabManager.openMemoSurface(in: tab.id)
     }
 
     private func closeTabs(_ targetIds: [UUID], allowPinned: Bool) {

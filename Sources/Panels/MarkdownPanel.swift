@@ -182,3 +182,99 @@ final class MarkdownPanel: Panel, ObservableObject {
         fileWatchSource?.cancel()
     }
 }
+
+@MainActor
+final class MemoPanel: Panel, ObservableObject {
+    let id: UUID
+    let panelType: PanelType = .memo
+
+    @Published private(set) var displayTitle: String
+    @Published private(set) var content: String
+    @Published private(set) var updatedAt: Date?
+    @Published private(set) var focusFlashToken: Int = 0
+    @Published var focusRequestToken: UInt64 = 0
+
+    private(set) var workspaceId: UUID
+    private weak var workspace: Workspace?
+    private var workspaceSubscription: AnyCancellable?
+    private var isEditing = false
+
+    var displayIcon: String? { "note.text" }
+
+    init(workspace: Workspace) {
+        self.id = UUID()
+        self.workspaceId = workspace.id
+        self.workspace = workspace
+        self.displayTitle = String(localized: "workspace.memo.panelTitle", defaultValue: "Memo")
+        self.content = workspace.memo ?? ""
+        self.updatedAt = workspace.memoUpdatedAt
+        bind(to: workspace)
+    }
+
+    func updateWorkspace(_ workspace: Workspace) {
+        workspaceId = workspace.id
+        self.workspace = workspace
+        bind(to: workspace)
+    }
+
+    func focus() {
+        focusRequestToken &+= 1
+    }
+
+    func unfocus() {
+        endEditing()
+    }
+
+    func close() {
+        persistContent()
+    }
+
+    func triggerFlash(reason: WorkspaceAttentionFlashReason) {
+        _ = reason
+        guard NotificationPaneFlashSettings.isEnabled() else { return }
+        focusFlashToken += 1
+    }
+
+    func beginEditing() {
+        isEditing = true
+    }
+
+    func endEditing() {
+        isEditing = false
+        persistContent()
+    }
+
+    func updateContentFromEditor(_ newContent: String) {
+        guard content != newContent else { return }
+        content = newContent
+    }
+
+    private func bind(to workspace: Workspace) {
+        workspaceSubscription = Publishers.CombineLatest(
+            workspace.$memo.removeDuplicates(),
+            workspace.$memoUpdatedAt.removeDuplicates()
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] memo, updatedAt in
+            guard let self else { return }
+            self.updatedAt = updatedAt
+            guard !self.isEditing else { return }
+            let nextContent = memo ?? ""
+            if self.content != nextContent {
+                self.content = nextContent
+            }
+        }
+    }
+
+    private func persistContent() {
+        guard let workspace else { return }
+        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if workspace.memo != nil {
+                workspace.clearMemo()
+            }
+        } else if workspace.memo != content {
+            workspace.setMemo(content)
+        }
+        updatedAt = workspace.memoUpdatedAt
+    }
+}

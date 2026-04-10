@@ -2015,6 +2015,15 @@ struct CMUXCLI {
             let payload = try client.sendV2(method: "workspace.rename", params: params)
             printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: v2OKSummary(payload, idFormat: idFormat, kinds: ["workspace"]))
 
+        case "workspace-memo":
+            try runWorkspaceMemo(
+                commandArgs: commandArgs,
+                client: client,
+                jsonOutput: jsonOutput,
+                idFormat: idFormat,
+                windowOverride: windowId
+            )
+
         case "current-workspace":
             let response = try sendV1Command("current_workspace", client: client)
             if jsonOutput {
@@ -6707,6 +6716,30 @@ struct CMUXCLI {
               cmux rename-workspace "backend logs"
               cmux rename-window --workspace workspace:2 "agent run"
             """
+        case "workspace-memo":
+            return """
+            Usage: cmux workspace-memo <get|set|append|clear> [flags]
+
+            Read or write a Markdown memo for a workspace. Defaults to the current workspace.
+
+            Subcommands:
+              get                          Print the current memo
+              set [--file <path>] <text>   Set the memo from text or a file
+              append [--file <path>] <text>
+                                           Append text or a file to the existing memo
+              clear                        Remove the memo
+
+            Flags:
+              --workspace <id|ref|index>   Workspace context (default: current/$CMUX_WORKSPACE_ID)
+              --file <path>                Read memo contents from a file (set only)
+
+            Example:
+              cmux workspace-memo get
+              cmux workspace-memo set "## TODO\n- [ ] API integration"
+              cmux workspace-memo append "\n- [ ] Add tests"
+              cmux workspace-memo set --workspace workspace:2 --file ./notes.md
+              cmux workspace-memo clear
+            """
         case "current-workspace":
             return """
             Usage: cmux current-workspace
@@ -7470,6 +7503,119 @@ struct CMUXCLI {
         }
 
         return Bundle.main.resourceURL?.appendingPathComponent("ghostty", isDirectory: true)
+    }
+
+    private func runWorkspaceMemo(
+        commandArgs: [String],
+        client: SocketClient,
+        jsonOutput: Bool,
+        idFormat: CLIIDFormat,
+        windowOverride: String?
+    ) throws {
+        guard let subcommand = commandArgs.first?.lowercased() else {
+            throw CLIError(message: "workspace-memo requires a subcommand: get, set, append, or clear")
+        }
+
+        func workspaceParams(from args: [String]) throws -> (workspaceId: String?, remaining: [String]) {
+            let (workspaceOpt, remaining) = parseOption(args, name: "--workspace")
+            let workspaceArg = workspaceOpt ?? (windowOverride == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
+            let workspaceId = try normalizeWorkspaceHandle(workspaceArg, client: client, allowCurrent: true)
+            return (workspaceId, remaining)
+        }
+
+        func memoTextForWrite(
+            subcommand: String,
+            args: [String]
+        ) throws -> (workspaceId: String?, memoText: String) {
+            let parsedWorkspace = try workspaceParams(from: args)
+            let (fileOpt, remaining) = parseOption(parsedWorkspace.remaining, name: "--file")
+            let positionals = remaining.dropFirst(remaining.first == "--" ? 1 : 0)
+            if let unknown = positionals.first(where: { $0.hasPrefix("--") }) {
+                throw CLIError(message: "workspace-memo \(subcommand): unknown flag '\(unknown)'")
+            }
+            if fileOpt != nil, !positionals.isEmpty {
+                throw CLIError(message: "workspace-memo \(subcommand) accepts either --file or inline text, not both")
+            }
+
+            let memoText: String
+            if let fileOpt {
+                let resolvedPath = resolvePath(fileOpt)
+                do {
+                    memoText = try String(contentsOfFile: resolvedPath, encoding: .utf8)
+                } catch {
+                    throw CLIError(message: "workspace-memo \(subcommand): failed to read file '\(resolvedPath)'")
+                }
+            } else {
+                memoText = positionals.joined(separator: " ")
+            }
+
+            if memoText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw CLIError(message: "workspace-memo \(subcommand) requires non-empty memo text")
+            }
+
+            return (parsedWorkspace.workspaceId, memoText)
+        }
+
+        switch subcommand {
+        case "get":
+            let parsed = try workspaceParams(from: Array(commandArgs.dropFirst()))
+            let unexpected = parsed.remaining.filter { $0 != "--" }
+            if let unknown = unexpected.first(where: { $0.hasPrefix("--") }) {
+                throw CLIError(message: "workspace-memo get: unknown flag '\(unknown)'")
+            }
+            if !unexpected.isEmpty {
+                throw CLIError(message: "workspace-memo get does not take positional arguments")
+            }
+
+            var params: [String: Any] = [:]
+            if let workspaceId = parsed.workspaceId {
+                params["workspace_id"] = workspaceId
+            }
+            let payload = try client.sendV2(method: "workspace.memo.get", params: params)
+            if jsonOutput {
+                print(jsonString(formatIDs(payload, mode: idFormat)))
+            } else if let memo = payload["memo"] as? String {
+                print(memo)
+            }
+
+        case "set":
+            let write = try memoTextForWrite(subcommand: "set", args: Array(commandArgs.dropFirst()))
+            var params: [String: Any] = ["memo": write.memoText]
+            if let workspaceId = write.workspaceId {
+                params["workspace_id"] = workspaceId
+            }
+            let payload = try client.sendV2(method: "workspace.memo.set", params: params)
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        case "append":
+            let write = try memoTextForWrite(subcommand: "append", args: Array(commandArgs.dropFirst()))
+            var params: [String: Any] = ["memo": write.memoText]
+            if let workspaceId = write.workspaceId {
+                params["workspace_id"] = workspaceId
+            }
+            let payload = try client.sendV2(method: "workspace.memo.append", params: params)
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        case "clear":
+            let parsed = try workspaceParams(from: Array(commandArgs.dropFirst()))
+            let unexpected = parsed.remaining.filter { $0 != "--" }
+            if let unknown = unexpected.first(where: { $0.hasPrefix("--") }) {
+                throw CLIError(message: "workspace-memo clear: unknown flag '\(unknown)'")
+            }
+            if !unexpected.isEmpty {
+                throw CLIError(message: "workspace-memo clear does not take positional arguments")
+            }
+
+            var params: [String: Any] = [:]
+            if let workspaceId = parsed.workspaceId {
+                params["workspace_id"] = workspaceId
+            }
+            let payload = try client.sendV2(method: "workspace.memo.clear", params: params)
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        default:
+            throw CLIError(message: "Unknown workspace-memo subcommand '\(subcommand)'. Use get, set, append, or clear.")
+        }
     }
 
     private func runThemes(commandArgs: [String], jsonOutput: Bool) throws {
@@ -13314,6 +13460,7 @@ struct CMUXCLI {
           close-workspace --workspace <id|ref>
           select-workspace --workspace <id|ref>
           rename-workspace [--workspace <id|ref>] <title>
+          workspace-memo <get|set|append|clear> [--workspace <id|ref|index>] [--file <path>] [text]
           rename-window [--workspace <id|ref>] <title>
           current-workspace
           read-screen [--workspace <id|ref>] [--surface <id|ref>] [--scrollback] [--lines <n>]

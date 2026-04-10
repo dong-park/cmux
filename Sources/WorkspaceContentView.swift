@@ -236,8 +236,14 @@ struct WorkspaceContentView: View {
     @State private var config = WorkspaceContentView.resolveGhosttyAppearanceConfig(reason: "stateInit")
     @AppStorage(WorkspacePresentationModeSettings.modeKey)
     private var workspacePresentationMode = WorkspacePresentationModeSettings.defaultMode.rawValue
+    @AppStorage(PaneNumberBadgeSettings.enabledKey)
+    private var paneNumberBadgeEnabled = PaneNumberBadgeSettings.defaultEnabled
+    @AppStorage(PaneNumberBadgeSettings.displayModeKey)
+    private var paneNumberBadgeDisplayMode = PaneNumberBadgeSettings.defaultMode.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject var notificationStore: TerminalNotificationStore
+    @State private var showsTemporaryPaneNumberBadges = false
+    @State private var paneNumberBadgeHideWorkItem: DispatchWorkItem?
 
     private var isMinimalMode: Bool {
         WorkspacePresentationModeSettings.mode(for: workspacePresentationMode) == .minimal
@@ -256,8 +262,15 @@ struct WorkspaceContentView: View {
 
     var body: some View {
         let appearance = PanelAppearance.fromConfig(config)
-        let isSplit = workspace.bonsplitController.allPaneIds.count > 1 ||
-            workspace.panels.count > 1
+        let paneIds = workspace.bonsplitController.allPaneIds
+        let paneBadgeTextByPaneUUID = Dictionary(
+            uniqueKeysWithValues: paneIds.map { ($0.id, TerminalController.shared.paneRef(for: $0.id)) }
+        )
+        let paneCount = paneIds.count
+        let isSplit = paneCount > 1 || workspace.panels.count > 1
+        let showsPaneNumberBadge = paneNumberBadgeEnabled &&
+            paneCount > 1 &&
+            (PaneNumberBadgeSettings.mode(for: paneNumberBadgeDisplayMode) == .always || showsTemporaryPaneNumberBadges)
         let usesWorkspacePaneOverlay = TmuxOverlayExperimentSettings.target().usesWorkspacePaneOverlay
 
         // Inactive workspaces are kept alive in a ZStack (for state preservation) but their
@@ -283,6 +296,7 @@ struct WorkspaceContentView: View {
             let _ = Self.debugPanelLookup(tab: tab, workspace: workspace)
             if let panel = workspace.panel(for: tab.id) {
                 let isFocused = isWorkspaceInputActive && workspace.focusedPanelId == panel.id
+                let paneBadgeText = paneBadgeTextByPaneUUID[paneId.id] ?? "pane:?"
                 let isSelectedInPane = workspace.bonsplitController.selectedTab(inPane: paneId)?.id == tab.id
                 let isVisibleInUI = Self.panelVisibleInUI(
                     isWorkspaceVisible: isWorkspaceVisible,
@@ -306,6 +320,8 @@ struct WorkspaceContentView: View {
                     isSplit: isSplit,
                     appearance: appearance,
                     hasUnreadNotification: showsNotificationRing && !usesWorkspacePaneOverlay,
+                    paneBadgeText: paneBadgeText,
+                    showsPaneNumberBadge: showsPaneNumberBadge,
                     onFocus: {
                         // Keep bonsplit focus in sync with the AppKit first responder for the
                         // active workspace. This prevents divergence between the blue focused-tab
@@ -327,10 +343,26 @@ struct WorkspaceContentView: View {
             } else {
                 // Fallback for tabs without panels (shouldn't happen normally)
                 EmptyPanelView(workspace: workspace, paneId: paneId)
+                    .overlay(alignment: .topLeading) {
+                        if showsPaneNumberBadge, let paneBadgeText = paneBadgeTextByPaneUUID[paneId.id] {
+                            PaneNumberBadgeView(
+                                text: paneBadgeText,
+                                isFocused: isWorkspaceInputActive && workspace.bonsplitController.focusedPaneId == paneId
+                            )
+                        }
+                    }
             }
         } emptyPane: { paneId in
             // Empty pane content
             EmptyPanelView(workspace: workspace, paneId: paneId)
+                .overlay(alignment: .topLeading) {
+                    if showsPaneNumberBadge, let paneBadgeText = paneBadgeTextByPaneUUID[paneId.id] {
+                        PaneNumberBadgeView(
+                            text: paneBadgeText,
+                            isFocused: isWorkspaceInputActive && workspace.bonsplitController.focusedPaneId == paneId
+                        )
+                    }
+                }
                 .onTapGesture {
                     workspace.bonsplitController.focusPane(paneId)
                 }
@@ -376,13 +408,26 @@ struct WorkspaceContentView: View {
                 notificationPayloadHex: payloadHex
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: PaneNumberBadgeSettings.shortcutRequestNotification)) { notification in
+            guard PaneNumberBadgeSettings.mode(for: paneNumberBadgeDisplayMode) == .onShortcut else { return }
+            guard let workspaceId = notification.userInfo?[PaneNumberBadgeSettings.workspaceIdUserInfoKey] as? String,
+                  workspaceId == workspace.id.uuidString else { return }
+            revealPaneNumberBadgesTemporarily()
+        }
+        .onDisappear {
+            paneNumberBadgeHideWorkItem?.cancel()
+            paneNumberBadgeHideWorkItem = nil
+            showsTemporaryPaneNumberBadges = false
+        }
 
-        Group {
-            if isMinimalMode && !isFullScreen {
-                bonsplitView
-                    .ignoresSafeArea(.container, edges: .top)
-            } else {
-                bonsplitView
+        VStack(spacing: 0) {
+            Group {
+                if isMinimalMode && !isFullScreen {
+                    bonsplitView
+                        .ignoresSafeArea(.container, edges: .top)
+                } else {
+                    bonsplitView
+                }
             }
         }
     }
@@ -413,6 +458,20 @@ struct WorkspaceContentView: View {
                 }
             }
         }
+    }
+
+    private func revealPaneNumberBadgesTemporarily() {
+        showsTemporaryPaneNumberBadges = true
+        paneNumberBadgeHideWorkItem?.cancel()
+        let workItem = DispatchWorkItem {
+            showsTemporaryPaneNumberBadges = false
+            paneNumberBadgeHideWorkItem = nil
+        }
+        paneNumberBadgeHideWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + PaneNumberBadgeSettings.temporaryDisplayDuration,
+            execute: workItem
+        )
     }
 
     private var splitZoomRenderIdentity: String {

@@ -96,6 +96,26 @@ enum PaneFirstClickFocusSettings {
     }
 }
 
+enum PaneNumberBadgeSettings {
+    static let enabledKey = "paneNumberBadgeEnabled"
+    static let displayModeKey = "paneNumberBadgeDisplayMode"
+    static let defaultEnabled = true
+    static let shortcutRequestNotification = Notification.Name("cmux.paneNumberBadge.showRequested")
+    static let workspaceIdUserInfoKey = "workspaceId"
+    static let temporaryDisplayDuration: TimeInterval = 1.5
+
+    enum Mode: String {
+        case always
+        case onShortcut
+    }
+
+    static let defaultMode: Mode = .always
+
+    static func mode(for rawValue: String?) -> Mode {
+        Mode(rawValue: rawValue ?? "") ?? defaultMode
+    }
+}
+
 enum UITestLaunchManifest {
     static let argumentName = "-cmuxUITestLaunchManifest"
 

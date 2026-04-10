@@ -15,6 +15,8 @@ struct TerminalPanelView: View {
     let isSplit: Bool
     let appearance: PanelAppearance
     let hasUnreadNotification: Bool
+    let paneBadgeText: String
+    let showsPaneNumberBadge: Bool
     let onFocus: () -> Void
     let onTriggerFlash: () -> Void
 
@@ -31,6 +33,9 @@ struct TerminalPanelView: View {
             showsUnreadNotificationRing: hasUnreadNotification && notificationPaneRingEnabled,
             inactiveOverlayColor: appearance.unfocusedOverlayNSColor,
             inactiveOverlayOpacity: appearance.unfocusedOverlayOpacity,
+            paneNumberBadgeText: paneBadgeText,
+            showsPaneNumberBadge: showsPaneNumberBadge,
+            paneNumberBadgeIsFocused: isFocused,
             searchState: panel.searchState,
             reattachToken: panel.viewReattachToken,
             onFocus: { _ in onFocus() },

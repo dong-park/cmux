@@ -2063,6 +2063,14 @@ class TerminalController {
             return v2Result(id: id, self.v2WorkspaceReorder(params: params))
         case "workspace.rename":
             return v2Result(id: id, self.v2WorkspaceRename(params: params))
+        case "workspace.memo.get":
+            return v2Result(id: id, self.v2WorkspaceMemoGet(params: params))
+        case "workspace.memo.set":
+            return v2Result(id: id, self.v2WorkspaceMemoSet(params: params))
+        case "workspace.memo.append":
+            return v2Result(id: id, self.v2WorkspaceMemoAppend(params: params))
+        case "workspace.memo.clear":
+            return v2Result(id: id, self.v2WorkspaceMemoClear(params: params))
         case "workspace.action":
             return v2Result(id: id, self.v2WorkspaceAction(params: params))
         case "workspace.next":
@@ -2441,6 +2449,10 @@ class TerminalController {
             "workspace.move_to_window",
             "workspace.reorder",
             "workspace.rename",
+            "workspace.memo.get",
+            "workspace.memo.set",
+            "workspace.memo.append",
+            "workspace.memo.clear",
             "workspace.action",
             "workspace.next",
             "workspace.previous",
@@ -2996,6 +3008,10 @@ class TerminalController {
             return id
         }
         return nil
+    }
+
+    func paneRef(for paneUUID: UUID) -> String {
+        v2EnsureHandleRef(kind: .pane, uuid: paneUUID)
     }
 
     private func v2Ref(kind: V2HandleKind, uuid: UUID?) -> Any {
@@ -3604,6 +3620,129 @@ class TerminalController {
             "title": title
         ])
     }
+
+    private func v2WorkspaceMemoTarget(params: [String: Any]) -> (tabManager: TabManager, workspace: Workspace)? {
+        if let workspaceId = v2UUID(params, "workspace_id") ?? v2UUID(params, "workspace") {
+            return v2MainSync {
+                guard let manager = AppDelegate.shared?.tabManagerFor(tabId: workspaceId),
+                      let workspace = manager.tabs.first(where: { $0.id == workspaceId }) else {
+                    return nil
+                }
+                return (manager, workspace)
+            }
+        }
+
+        guard let manager = v2ResolveTabManager(params: params) else {
+            return nil
+        }
+        return v2MainSync {
+            guard let workspace = v2ResolveWorkspace(params: params, tabManager: manager) else {
+                return nil
+            }
+            return (manager, workspace)
+        }
+    }
+
+    private func v2WorkspaceMemoISO8601String(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
+    private func v2WorkspaceMemoGet(params: [String: Any]) -> V2CallResult {
+        guard let target = v2WorkspaceMemoTarget(params: params) else {
+            return .err(code: "not_found", message: "Workspace not found", data: nil)
+        }
+
+        let snapshot = v2MainSync {
+            (
+                memo: target.workspace.memo,
+                updatedAt: target.workspace.memoUpdatedAt
+            )
+        }
+        let windowId = v2ResolveWindowId(tabManager: target.tabManager)
+        return .ok([
+            "window_id": v2OrNull(windowId?.uuidString),
+            "window_ref": v2Ref(kind: .window, uuid: windowId),
+            "workspace_id": target.workspace.id.uuidString,
+            "workspace_ref": v2Ref(kind: .workspace, uuid: target.workspace.id),
+            "memo": v2OrNull(snapshot.memo),
+            "updated_at": v2OrNull(v2WorkspaceMemoISO8601String(snapshot.updatedAt))
+        ])
+    }
+
+    private func v2WorkspaceMemoSet(params: [String: Any]) -> V2CallResult {
+        guard let rawMemo = v2RawString(params, "memo"),
+              !rawMemo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .err(code: "invalid_params", message: "Missing or invalid memo", data: nil)
+        }
+        guard let target = v2WorkspaceMemoTarget(params: params) else {
+            return .err(code: "not_found", message: "Workspace not found", data: nil)
+        }
+
+        let updatedAt = v2MainSync {
+            target.workspace.setMemo(rawMemo)
+            return target.workspace.memoUpdatedAt
+        }
+
+        let windowId = v2ResolveWindowId(tabManager: target.tabManager)
+        return .ok([
+            "window_id": v2OrNull(windowId?.uuidString),
+            "window_ref": v2Ref(kind: .window, uuid: windowId),
+            "workspace_id": target.workspace.id.uuidString,
+            "workspace_ref": v2Ref(kind: .workspace, uuid: target.workspace.id),
+            "memo": rawMemo,
+            "updated_at": v2OrNull(v2WorkspaceMemoISO8601String(updatedAt))
+        ])
+    }
+
+    private func v2WorkspaceMemoAppend(params: [String: Any]) -> V2CallResult {
+        guard let rawMemo = v2RawString(params, "memo"),
+              !rawMemo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .err(code: "invalid_params", message: "Missing or invalid memo", data: nil)
+        }
+        guard let target = v2WorkspaceMemoTarget(params: params) else {
+            return .err(code: "not_found", message: "Workspace not found", data: nil)
+        }
+
+        let snapshot = v2MainSync {
+            target.workspace.appendMemo(rawMemo)
+            return (
+                memo: target.workspace.memo,
+                updatedAt: target.workspace.memoUpdatedAt
+            )
+        }
+
+        let windowId = v2ResolveWindowId(tabManager: target.tabManager)
+        return .ok([
+            "window_id": v2OrNull(windowId?.uuidString),
+            "window_ref": v2Ref(kind: .window, uuid: windowId),
+            "workspace_id": target.workspace.id.uuidString,
+            "workspace_ref": v2Ref(kind: .workspace, uuid: target.workspace.id),
+            "memo": v2OrNull(snapshot.memo),
+            "updated_at": v2OrNull(v2WorkspaceMemoISO8601String(snapshot.updatedAt))
+        ])
+    }
+
+    private func v2WorkspaceMemoClear(params: [String: Any]) -> V2CallResult {
+        guard let target = v2WorkspaceMemoTarget(params: params) else {
+            return .err(code: "not_found", message: "Workspace not found", data: nil)
+        }
+
+        v2MainSync {
+            target.workspace.clearMemo()
+        }
+
+        let windowId = v2ResolveWindowId(tabManager: target.tabManager)
+        return .ok([
+            "window_id": v2OrNull(windowId?.uuidString),
+            "window_ref": v2Ref(kind: .window, uuid: windowId),
+            "workspace_id": target.workspace.id.uuidString,
+            "workspace_ref": v2Ref(kind: .workspace, uuid: target.workspace.id)
+        ])
+    }
+
     private func v2WorkspaceNext(params: [String: Any]) -> V2CallResult {
         guard let tabManager = v2ResolveTabManager(params: params) else {
             return .err(code: "unavailable", message: "TabManager not available", data: nil)

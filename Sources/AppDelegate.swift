@@ -5593,6 +5593,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return mainWindowContexts.values.first
     }
 
+    private func requestPaneNumberBadgeReveal(for workspaceId: UUID?) {
+        guard let workspaceId else { return }
+        NotificationCenter.default.post(
+            name: PaneNumberBadgeSettings.shortcutRequestNotification,
+            object: nil,
+            userInfo: [PaneNumberBadgeSettings.workspaceIdUserInfoKey: workspaceId.uuidString]
+        )
+    }
+
     private func activateMainWindowContextForShortcutEvent(_ event: NSEvent) {
         let preferredWindow = mainWindowForShortcutEvent(event)
 #if DEBUG
@@ -9923,6 +9932,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Flash the currently focused panel so the user can visually confirm focus.
         if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .triggerFlash)) {
             tabManager?.triggerFocusFlash()
+            return true
+        }
+
+        if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .showPaneNumbers)) {
+            let workspaceId = preferredMainWindowContextForShortcuts(event: event)?.tabManager.selectedTabId
+                ?? tabManager?.selectedTabId
+            requestPaneNumberBadgeReveal(for: workspaceId)
             return true
         }
 
