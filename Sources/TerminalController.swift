@@ -2071,6 +2071,16 @@ class TerminalController {
             return v2Result(id: id, self.v2WorkspaceMemoAppend(params: params))
         case "workspace.memo.clear":
             return v2Result(id: id, self.v2WorkspaceMemoClear(params: params))
+        case "history.add":
+            return v2Result(id: id, self.v2HistoryAdd(params: params))
+        case "history.list":
+            return v2Result(id: id, self.v2HistoryList(params: params))
+        case "history.summary":
+            return v2Result(id: id, self.v2HistorySummary(params: params))
+        case "history.clear":
+            return v2Result(id: id, self.v2HistoryClear(params: params))
+        case "history.open":
+            return v2Result(id: id, self.v2HistoryOpen(params: params))
         case "workspace.action":
             return v2Result(id: id, self.v2WorkspaceAction(params: params))
         case "workspace.next":
@@ -2453,6 +2463,11 @@ class TerminalController {
             "workspace.memo.set",
             "workspace.memo.append",
             "workspace.memo.clear",
+            "history.add",
+            "history.list",
+            "history.summary",
+            "history.clear",
+            "history.open",
             "workspace.action",
             "workspace.next",
             "workspace.previous",
@@ -3740,6 +3755,138 @@ class TerminalController {
             "window_ref": v2Ref(kind: .window, uuid: windowId),
             "workspace_id": target.workspace.id.uuidString,
             "workspace_ref": v2Ref(kind: .workspace, uuid: target.workspace.id)
+        ])
+    }
+
+    // MARK: - Global History
+
+    private func v2HistoryAdd(params: [String: Any]) -> V2CallResult {
+        guard let typeStr = v2RawString(params, "type"),
+              !typeStr.isEmpty else {
+            return .err(code: "invalid_params", message: "Missing required 'type'", data: nil)
+        }
+        guard let summary = v2RawString(params, "summary"),
+              !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .err(code: "invalid_params", message: "Missing required 'summary'", data: nil)
+        }
+
+        let phase = v2RawString(params, "phase")
+        let detail = v2RawString(params, "detail")
+        let tags: [String] = {
+            if let arr = params["tags"] as? [String] { return arr }
+            if let str = v2RawString(params, "tags") {
+                return str.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            }
+            return []
+        }()
+        let cwd = v2RawString(params, "cwd")
+        let workspaceName = v2RawString(params, "workspace_name")
+
+        let entry = GlobalHistory.Entry(
+            type: typeStr,
+            phase: phase,
+            summary: summary,
+            detail: detail,
+            tags: tags,
+            cwd: cwd,
+            workspaceName: workspaceName
+        )
+
+        guard GlobalHistory.add(entry) else {
+            return .err(code: "io_error", message: "Failed to write history", data: nil)
+        }
+
+        return .ok([
+            "id": entry.id.uuidString,
+            "type": entry.type,
+            "summary": entry.summary,
+            "timestamp": ISO8601DateFormatter().string(from: entry.timestamp)
+        ])
+    }
+
+    private func v2HistoryList(params: [String: Any]) -> V2CallResult {
+        let typeFilter = v2RawString(params, "type")
+        let phaseFilter = v2RawString(params, "phase")
+        let tagFilter = v2RawString(params, "tag")
+        let cwdFilter = v2RawString(params, "cwd")
+        let sinceFilter: Date? = {
+            guard let raw = v2RawString(params, "since") else { return nil }
+            // Support relative durations like "7d", "24h", "30m"
+            let scanner = Scanner(string: raw)
+            var value: Double = 0
+            guard scanner.scanDouble(&value) else { return nil }
+            let remaining = String(raw[scanner.currentIndex...]).lowercased()
+            let seconds: TimeInterval
+            switch remaining {
+            case "d": seconds = value * 86400
+            case "h": seconds = value * 3600
+            case "m": seconds = value * 60
+            default: return nil
+            }
+            return Date().addingTimeInterval(-seconds)
+        }()
+        let limitValue = params["limit"] as? Int ?? 50
+
+        let entries = GlobalHistory.list(
+            type: typeFilter,
+            phase: phaseFilter,
+            tag: tagFilter,
+            cwd: cwdFilter,
+            since: sinceFilter,
+            limit: limitValue
+        )
+
+        let formatter = ISO8601DateFormatter()
+        let items: [[String: Any]] = entries.map { entry in
+            var item: [String: Any] = [
+                "id": entry.id.uuidString,
+                "type": entry.type,
+                "summary": entry.summary,
+                "tags": entry.tags,
+                "timestamp": formatter.string(from: entry.timestamp)
+            ]
+            if let phase = entry.phase { item["phase"] = phase }
+            if let detail = entry.detail { item["detail"] = detail }
+            if let cwd = entry.cwd { item["cwd"] = cwd }
+            if let name = entry.workspaceName { item["workspace_name"] = name }
+            return item
+        }
+
+        return .ok([
+            "count": items.count,
+            "entries": items
+        ])
+    }
+
+    private func v2HistorySummary(params: [String: Any]) -> V2CallResult {
+        let summaryText = GlobalHistory.summary()
+        return .ok([
+            "summary": summaryText
+        ])
+    }
+
+    private func v2HistoryClear(params: [String: Any]) -> V2CallResult {
+        guard GlobalHistory.clear() else {
+            return .err(code: "io_error", message: "Failed to clear history", data: nil)
+        }
+        return .ok(["status": "cleared"])
+    }
+
+    private func v2HistoryOpen(params: [String: Any]) -> V2CallResult {
+        guard let tabManager = v2ResolveTabManager(params: params) else {
+            return .err(code: "unavailable", message: "TabManager not available", data: nil)
+        }
+
+        let panelId = v2MainSync {
+            tabManager.openHistorySurface()
+        }
+
+        guard let panelId else {
+            return .err(code: "failed", message: "Could not open history panel", data: nil)
+        }
+
+        return .ok([
+            "panel_id": panelId.uuidString
         ])
     }
 

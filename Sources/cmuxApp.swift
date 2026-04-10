@@ -820,6 +820,12 @@ struct cmuxApp: App {
 
                 Divider()
 
+                Button(String(localized: "menu.view.openHistory", defaultValue: "Open History")) {
+                    activeTabManager.openHistorySurface()
+                }
+
+                Divider()
+
                 // Numbered workspace selection (9 = last workspace)
                 ForEach(1...9, id: \.self) { number in
                     Button(String(localized: "menu.view.workspace", defaultValue: "Workspace \(number)")) {

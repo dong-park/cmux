@@ -2024,6 +2024,13 @@ struct CMUXCLI {
                 windowOverride: windowId
             )
 
+        case "history":
+            try runHistory(
+                commandArgs: commandArgs,
+                client: client,
+                jsonOutput: jsonOutput
+            )
+
         case "current-workspace":
             let response = try sendV1Command("current_workspace", client: client)
             if jsonOutput {
@@ -6740,6 +6747,43 @@ struct CMUXCLI {
               cmux workspace-memo set --workspace workspace:2 --file ./notes.md
               cmux workspace-memo clear
             """
+        case "history":
+            return """
+            Usage: cmux history <add|list|summary|clear> [flags]
+
+            App-wide history that accumulates across workspaces and sessions.
+            Stored in ~/Documents/cmux/history.json.
+
+            Subcommands:
+              add --type <type> --summary <text> [flags]   Add an entry
+              list [flags]                                  List entries (newest first)
+              summary                                       One-line summary of all entries
+              clear                                         Remove all entries
+              open                                          Open history panel in current workspace
+
+            Add flags:
+              --type <type>         Entry type: decision, task, feedback, pattern, phase, note
+              --summary <text>      One-line summary (required)
+              --phase <phase>       Phase context: spec, plan, build, test, review, ship, feedback
+              --detail <text>       Extended description
+              --tags <t1,t2,...>    Comma-separated tags
+
+            List flags:
+              --type <type>         Filter by type
+              --phase <phase>       Filter by phase
+              --tag <tag>           Filter by tag
+              --cwd <path|.>        Filter by project directory (. = current workspace cwd)
+              --since <duration>    Filter by time: 7d, 24h, 30m
+              --limit <n>           Max entries (default: 50)
+
+            Example:
+              cmux history add --type decision --summary "Redis TTL 300s" --tags D1,cache
+              cmux history add --type pattern --summary "Always specify TTL rationale in spec"
+              cmux history list --type pattern
+              cmux history list --tag D1
+              cmux history list --cwd . --since 7d
+              cmux history summary
+            """
         case "current-workspace":
             return """
             Usage: cmux current-workspace
@@ -7503,6 +7547,127 @@ struct CMUXCLI {
         }
 
         return Bundle.main.resourceURL?.appendingPathComponent("ghostty", isDirectory: true)
+    }
+
+    private func runHistory(
+        commandArgs: [String],
+        client: SocketClient,
+        jsonOutput: Bool
+    ) throws {
+        guard let subcommand = commandArgs.first?.lowercased() else {
+            throw CLIError(message: "history requires a subcommand: add, list, summary, clear, or open")
+        }
+
+        let restArgs = Array(commandArgs.dropFirst())
+
+        switch subcommand {
+        case "add":
+            let (typeOpt, r1) = parseOption(restArgs, name: "--type")
+            let (summaryOpt, r2) = parseOption(r1, name: "--summary")
+            let (phaseOpt, r3) = parseOption(r2, name: "--phase")
+            let (detailOpt, r4) = parseOption(r3, name: "--detail")
+            let (tagsOpt, _) = parseOption(r4, name: "--tags")
+
+            guard let typeVal = typeOpt, !typeVal.isEmpty else {
+                throw CLIError(message: "history add requires --type")
+            }
+
+            let summaryVal: String
+            if let s = summaryOpt, !s.isEmpty {
+                summaryVal = s
+            } else {
+                // Remaining positional args as summary
+                let positionals = r4.filter { !$0.starts(with: "--") }
+                guard !positionals.isEmpty else {
+                    throw CLIError(message: "history add requires --summary <text>")
+                }
+                summaryVal = positionals.joined(separator: " ")
+            }
+
+            var params: [String: Any] = [
+                "type": typeVal,
+                "summary": summaryVal
+            ]
+            if let phase = phaseOpt { params["phase"] = phase }
+            if let detail = detailOpt { params["detail"] = detail }
+            if let tags = tagsOpt { params["tags"] = tags }
+
+            let payload = try client.sendV2(method: "history.add", params: params)
+            if jsonOutput {
+                print(jsonString(payload))
+            } else {
+                printV2Payload(payload, jsonOutput: false, idFormat: .refs, fallbackText: "OK")
+            }
+
+        case "list":
+            var params: [String: Any] = [:]
+            let (typeOpt, r1) = parseOption(restArgs, name: "--type")
+            let (phaseOpt, r2) = parseOption(r1, name: "--phase")
+            let (tagOpt, r3) = parseOption(r2, name: "--tag")
+            let (cwdOpt, r4) = parseOption(r3, name: "--cwd")
+            let (sinceOpt, r5) = parseOption(r4, name: "--since")
+            let (limitOpt, _) = parseOption(r5, name: "--limit")
+
+            if let t = typeOpt { params["type"] = t }
+            if let p = phaseOpt { params["phase"] = p }
+            if let t = tagOpt { params["tag"] = t }
+            if let c = cwdOpt { params["cwd"] = c }
+            if let s = sinceOpt { params["since"] = s }
+            if let l = limitOpt, let n = Int(l) { params["limit"] = n }
+
+            let payload = try client.sendV2(method: "history.list", params: params)
+            if jsonOutput {
+                print(jsonString(payload))
+            } else {
+                guard let result = payload["result"] as? [String: Any],
+                      let entries = result["entries"] as? [[String: Any]] else {
+                    print("No entries")
+                    return
+                }
+                if entries.isEmpty {
+                    print("No entries")
+                    return
+                }
+                for entry in entries {
+                    let ts = (entry["timestamp"] as? String) ?? ""
+                    let shortTs = String(ts.prefix(10))
+                    let type = (entry["type"] as? String) ?? ""
+                    let summary = (entry["summary"] as? String) ?? ""
+                    let phase = (entry["phase"] as? String).map { " [\($0)]" } ?? ""
+                    let tags = (entry["tags"] as? [String]) ?? []
+                    let tagStr = tags.isEmpty ? "" : " tags:[\(tags.joined(separator: ","))]"
+                    print("[\(shortTs)] \(type)\(phase): \(summary)\(tagStr)")
+                }
+            }
+
+        case "summary":
+            let payload = try client.sendV2(method: "history.summary", params: [:])
+            if jsonOutput {
+                print(jsonString(payload))
+            } else if let result = payload["result"] as? [String: Any],
+                      let summary = result["summary"] as? String {
+                print(summary)
+            }
+
+        case "clear":
+            let payload = try client.sendV2(method: "history.clear", params: [:])
+            if jsonOutput {
+                print(jsonString(payload))
+            } else {
+                print("OK")
+            }
+
+        case "open":
+            let payload = try client.sendV2(method: "history.open", params: [:])
+            if jsonOutput {
+                print(jsonString(payload))
+            } else {
+                printV2Payload(payload, jsonOutput: false, idFormat: .refs, fallbackText: "OK")
+            }
+
+        default:
+            throw CLIError(message: "Unknown history subcommand: \(subcommand). Use add, list, summary, clear, or open.")
+        }
     }
 
     private func runWorkspaceMemo(

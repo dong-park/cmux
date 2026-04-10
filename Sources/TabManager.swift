@@ -3675,6 +3675,25 @@ class TabManager: ObservableObject {
         return targetWorkspace.openOrFocusMemoSurface(focus: true)?.id
     }
 
+    @discardableResult
+    func openHistorySurface(in workspaceId: UUID? = nil) -> UUID? {
+        let targetWorkspace: Workspace
+        if let workspaceId {
+            guard let workspace = tabs.first(where: { $0.id == workspaceId }) else { return nil }
+            targetWorkspace = workspace
+        } else {
+            guard let workspace = selectedWorkspace else { return nil }
+            targetWorkspace = workspace
+        }
+
+        if selectedTabId != targetWorkspace.id {
+            selectWorkspace(targetWorkspace)
+        }
+
+        targetWorkspace.clearSplitZoom()
+        return targetWorkspace.openOrFocusHistorySurface(focus: true)?.id
+    }
+
     // MARK: - Split Creation
 
     /// Create a new split in the current tab

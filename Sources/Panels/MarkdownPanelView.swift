@@ -889,3 +889,214 @@ final class MarkdownPanelPointerObserverView: NSView {
         return target === self ? nil : target
     }
 }
+
+// MARK: - History Panel View
+
+struct HistoryPanelView: View {
+    @ObservedObject var panel: HistoryPanel
+    let isFocused: Bool
+    let isVisibleInUI: Bool
+    let portalPriority: Int
+    let onRequestPanelFocus: () -> Void
+
+    @State private var focusFlashOpacity: Double = 0.0
+    @State private var filterText: String = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if panel.entries.isEmpty {
+                emptyState
+            } else {
+                entryList
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(focusFlashRing)
+        .onChange(of: panel.focusFlashToken) { _ in
+            flashFocus()
+        }
+        .onTapGesture {
+            onRequestPanelFocus()
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(panel.displayTitle)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Spacer()
+
+            if panel.filterType != nil || panel.filterPhase != nil || panel.filterTag != nil {
+                Button {
+                    panel.clearFilter()
+                    filterText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                panel.reload()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            Text("\(panel.entries.count)")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Image(systemName: "clock")
+                .font(.system(size: 24))
+                .foregroundStyle(.quaternary)
+            Text(String(localized: "history.empty", defaultValue: "No history entries"))
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Text(String(localized: "history.emptyHint", defaultValue: "Use `cmux history add` to record entries"))
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+    }
+
+    private var entryList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(panel.entries) { entry in
+                    HistoryEntryRow(entry: entry, onTagTap: { tag in
+                        panel.applyFilter(type: nil, phase: nil, tag: tag)
+                    })
+                    Divider().padding(.leading, 10)
+                }
+            }
+        }
+    }
+
+    private var focusFlashRing: some View {
+        RoundedRectangle(cornerRadius: 4)
+            .stroke(Color.accentColor, lineWidth: 2)
+            .opacity(focusFlashOpacity)
+    }
+
+    private func flashFocus() {
+        withAnimation(.easeIn(duration: 0.1)) { focusFlashOpacity = 0.6 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            withAnimation(.easeOut(duration: 0.4)) { focusFlashOpacity = 0.0 }
+        }
+    }
+}
+
+private struct HistoryEntryRow: View {
+    let entry: GlobalHistory.Entry
+    let onTagTap: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Image(systemName: iconForType(entry.type))
+                    .font(.system(size: 9))
+                    .foregroundStyle(colorForType(entry.type))
+                    .frame(width: 12)
+
+                Text(entry.type)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                if let phase = entry.phase {
+                    Text("[\(phase)]")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+
+                Spacer()
+
+                Text(relativeTime(entry.timestamp))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+
+            Text(entry.summary)
+                .font(.system(size: 11))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+
+            if let detail = entry.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+
+            if !entry.tags.isEmpty {
+                HStack(spacing: 3) {
+                    ForEach(entry.tags, id: \.self) { tag in
+                        Button {
+                            onTagTap(tag)
+                        } label: {
+                            Text(tag)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 3))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+    }
+
+    private func iconForType(_ type: String) -> String {
+        switch type {
+        case "decision": return "lightbulb.fill"
+        case "task": return "checklist"
+        case "feedback": return "bubble.left.fill"
+        case "pattern": return "sparkles"
+        case "phase": return "flag.fill"
+        case "note": return "note.text"
+        default: return "circle.fill"
+        }
+    }
+
+    private func colorForType(_ type: String) -> Color {
+        switch type {
+        case "decision": return .blue
+        case "task": return .green
+        case "feedback": return .orange
+        case "pattern": return .purple
+        case "phase": return .cyan
+        case "note": return .secondary
+        default: return .secondary
+        }
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        let interval = Date().timeIntervalSince(date)
+        if interval < 60 { return "now" }
+        if interval < 3600 { return "\(Int(interval / 60))m" }
+        if interval < 86400 { return "\(Int(interval / 3600))h" }
+        return "\(Int(interval / 86400))d"
+    }
+}

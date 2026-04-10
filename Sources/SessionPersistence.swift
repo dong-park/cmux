@@ -256,6 +256,8 @@ struct SessionMarkdownPanelSnapshot: Codable, Sendable {
 
 struct SessionMemoPanelSnapshot: Codable, Sendable {}
 
+struct SessionHistoryPanelSnapshot: Codable, Sendable {}
+
 struct SessionPanelSnapshot: Codable, Sendable {
     var id: UUID
     var type: PanelType
@@ -271,6 +273,7 @@ struct SessionPanelSnapshot: Codable, Sendable {
     var browser: SessionBrowserPanelSnapshot?
     var markdown: SessionMarkdownPanelSnapshot?
     var memo: SessionMemoPanelSnapshot?
+    var history: SessionHistoryPanelSnapshot?
 }
 
 enum SessionSplitOrientation: String, Codable, Sendable {

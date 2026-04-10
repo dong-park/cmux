@@ -278,3 +278,69 @@ final class MemoPanel: Panel, ObservableObject {
         updatedAt = workspace.memoUpdatedAt
     }
 }
+
+@MainActor
+final class HistoryPanel: Panel, ObservableObject {
+    let id: UUID
+    let panelType: PanelType = .history
+
+    @Published private(set) var displayTitle: String
+    @Published private(set) var entries: [GlobalHistory.Entry] = []
+    @Published private(set) var focusFlashToken: Int = 0
+    @Published var focusRequestToken: UInt64 = 0
+
+    @Published var filterType: String?
+    @Published var filterPhase: String?
+    @Published var filterTag: String?
+
+    var displayIcon: String? { "clock.arrow.circlepath" }
+
+    private var refreshTimer: Timer?
+
+    init() {
+        self.id = UUID()
+        self.displayTitle = String(localized: "history.panelTitle", defaultValue: "History")
+        reload()
+    }
+
+    func focus() {
+        focusRequestToken &+= 1
+        reload()
+    }
+
+    func unfocus() {}
+
+    func close() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+
+    func triggerFlash(reason: WorkspaceAttentionFlashReason) {
+        _ = reason
+        guard NotificationPaneFlashSettings.isEnabled() else { return }
+        focusFlashToken += 1
+    }
+
+    func reload() {
+        entries = GlobalHistory.list(
+            type: filterType,
+            phase: filterPhase,
+            tag: filterTag,
+            limit: 200
+        )
+    }
+
+    func applyFilter(type: String?, phase: String?, tag: String?) {
+        filterType = type
+        filterPhase = phase
+        filterTag = tag
+        reload()
+    }
+
+    func clearFilter() {
+        filterType = nil
+        filterPhase = nil
+        filterTag = nil
+        reload()
+    }
+}

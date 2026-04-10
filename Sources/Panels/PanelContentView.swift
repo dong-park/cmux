@@ -94,6 +94,16 @@ struct PanelContentView: View {
                         onRequestPanelFocus: onRequestPanelFocus
                     )
                 }
+            case .history:
+                if let historyPanel = panel as? HistoryPanel {
+                    HistoryPanelView(
+                        panel: historyPanel,
+                        isFocused: isFocused,
+                        isVisibleInUI: isVisibleInUI,
+                        portalPriority: portalPriority,
+                        onRequestPanelFocus: onRequestPanelFocus
+                    )
+                }
             }
         }
         .overlay(alignment: .topLeading) {

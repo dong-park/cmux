@@ -5186,6 +5186,8 @@ struct ContentView: View {
             return String(localized: "commandPalette.kind.markdown", defaultValue: "Markdown")
         case .memo:
             return String(localized: "commandPalette.kind.memo", defaultValue: "Memo")
+        case .history:
+            return String(localized: "commandPalette.kind.history", defaultValue: "History")
         }
     }
 
@@ -5199,6 +5201,8 @@ struct ContentView: View {
             return ["markdown", "note", "preview"]
         case .memo:
             return ["memo", "note", "notepad"]
+        case .history:
+            return ["history", "log", "timeline"]
         }
     }
 
@@ -12188,6 +12192,9 @@ private struct TabItemView: View, Equatable {
             Button(String(localized: "workspace.memo.open", defaultValue: "Open Memo")) {
                 openMemoSurface()
             }
+            Button(String(localized: "workspace.history.open", defaultValue: "Open History")) {
+                openHistorySurface()
+            }
         }
 
         if !remoteContextMenuWorkspaceIds.isEmpty {
@@ -12463,6 +12470,13 @@ private struct TabItemView: View, Equatable {
         lastSidebarSelectionIndex = index
         setSelectionToTabs()
         _ = tabManager.openMemoSurface(in: tab.id)
+    }
+
+    private func openHistorySurface() {
+        selectedTabIds = [tab.id]
+        lastSidebarSelectionIndex = index
+        setSelectionToTabs()
+        _ = tabManager.openHistorySurface(in: tab.id)
     }
 
     private func closeTabs(_ targetIds: [UUID], allowPinned: Bool) {

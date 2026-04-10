@@ -483,6 +483,12 @@ extension Workspace {
             browserSnapshot = nil
             markdownSnapshot = nil
             memoSnapshot = SessionMemoPanelSnapshot()
+        case .history:
+            guard panel is HistoryPanel else { return nil }
+            terminalSnapshot = nil
+            browserSnapshot = nil
+            markdownSnapshot = nil
+            memoSnapshot = nil
         }
 
         return SessionPanelSnapshot(
@@ -680,6 +686,12 @@ extension Workspace {
             }
             applySessionPanelMetadata(snapshot, toPanelId: memoPanel.id)
             return memoPanel.id
+        case .history:
+            guard let historyPanel = openOrFocusHistorySurface(inPane: paneId, focus: false) else {
+                return nil
+            }
+            applySessionPanelMetadata(snapshot, toPanelId: historyPanel.id)
+            return historyPanel.id
         }
     }
 
@@ -5706,6 +5718,7 @@ final class Workspace: Identifiable, ObservableObject {
         static let browser = "browser"
         static let markdown = "markdown"
         static let memo = "memo"
+        static let history = "history"
     }
 
     enum PanelShellActivityState: String {
@@ -6252,7 +6265,67 @@ final class Workspace: Identifiable, ObservableObject {
             return SurfaceKind.markdown
         case .memo:
             return SurfaceKind.memo
+        case .history:
+            return SurfaceKind.history
         }
+    }
+
+    func existingHistoryPanel() -> HistoryPanel? {
+        panels.values.compactMap { $0 as? HistoryPanel }.first
+    }
+
+    @discardableResult
+    func openOrFocusHistorySurface(
+        inPane paneId: PaneID? = nil,
+        focus: Bool = true
+    ) -> HistoryPanel? {
+        if let existing = existingHistoryPanel() {
+            if focus {
+                existing.reload()
+                focusPanel(existing.id)
+            }
+            return existing
+        }
+
+        let targetPaneId = paneId ?? bonsplitController.focusedPaneId ?? bonsplitController.allPaneIds.first
+        guard let targetPaneId else { return nil }
+
+        let previousFocusedPanelId = focusedPanelId
+        let previousHostedView = focusedTerminalPanel?.hostedView
+
+        let historyPanel = HistoryPanel()
+        panels[historyPanel.id] = historyPanel
+        panelTitles[historyPanel.id] = historyPanel.displayTitle
+
+        guard let newTabId = bonsplitController.createTab(
+            title: historyPanel.displayTitle,
+            icon: historyPanel.displayIcon,
+            kind: SurfaceKind.history,
+            isDirty: false,
+            isLoading: false,
+            isPinned: false,
+            inPane: targetPaneId
+        ) else {
+            panels.removeValue(forKey: historyPanel.id)
+            panelTitles.removeValue(forKey: historyPanel.id)
+            return nil
+        }
+
+        surfaceIdToPanelId[newTabId] = historyPanel.id
+        if focus {
+            bonsplitController.focusPane(targetPaneId)
+            bonsplitController.selectTab(newTabId)
+            historyPanel.focus()
+            applyTabSelection(tabId: newTabId, inPane: targetPaneId)
+        } else {
+            preserveFocusAfterNonFocusSplit(
+                preferredPanelId: previousFocusedPanelId,
+                splitPanelId: historyPanel.id,
+                previousHostedView: previousHostedView
+            )
+        }
+
+        return historyPanel
     }
 
     private func resolvedPanelTitle(panelId: UUID, fallback: String) -> String {
