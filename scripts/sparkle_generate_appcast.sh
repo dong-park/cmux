@@ -10,14 +10,43 @@ DMG_PATH="$1"
 TAG="$2"
 OUT_PATH="${3:-appcast.xml}"
 
+resolve_release_repo() {
+  if [[ -n "${CMUX_RELEASE_REPO:-}" ]]; then
+    printf '%s\n' "$CMUX_RELEASE_REPO"
+    return
+  fi
+
+  local remote_url
+  remote_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+  case "$remote_url" in
+    git@github.com:*)
+      remote_url="${remote_url#git@github.com:}"
+      ;;
+    https://github.com/*)
+      remote_url="${remote_url#https://github.com/}"
+      ;;
+    http://github.com/*)
+      remote_url="${remote_url#http://github.com/}"
+      ;;
+  esac
+  remote_url="${remote_url%.git}"
+  printf '%s\n' "$remote_url"
+}
+
+RELEASE_REPO="$(resolve_release_repo)"
+if [[ ! "$RELEASE_REPO" =~ .+/.+ ]]; then
+  echo "Could not resolve GitHub release repo. Set CMUX_RELEASE_REPO=owner/repo." >&2
+  exit 1
+fi
+
 if [[ -z "${SPARKLE_PRIVATE_KEY:-}" ]]; then
   echo "SPARKLE_PRIVATE_KEY is required (exported from Sparkle generate_keys)." >&2
   exit 1
 fi
 
 SPARKLE_VERSION="${SPARKLE_VERSION:-2.8.1}"
-DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://github.com/manaflow-ai/cmux/releases/download/$TAG/}"
-RELEASE_NOTES_URL="${RELEASE_NOTES_URL:-https://github.com/manaflow-ai/cmux/releases/tag/$TAG}"
+DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://github.com/${RELEASE_REPO}/releases/download/$TAG/}"
+RELEASE_NOTES_URL="${RELEASE_NOTES_URL:-https://github.com/${RELEASE_REPO}/releases/tag/$TAG}"
 
 work_dir="$(mktemp -d)"
 cleanup() {

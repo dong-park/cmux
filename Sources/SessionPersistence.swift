@@ -10,6 +10,9 @@ enum SessionPersistencePolicy {
     static let defaultSidebarWidth: Double = 200
     static let minimumSidebarWidth: Double = 180
     static let maximumSidebarWidth: Double = 600
+    static let defaultRightPanelWidth: Double = 300
+    static let minimumRightPanelWidth: Double = 200
+    static let maximumRightPanelWidth: Double = 600
     static let minimumWindowWidth: Double = 300
     static let minimumWindowHeight: Double = 200
     static let autosaveInterval: TimeInterval = 8.0
@@ -23,6 +26,12 @@ enum SessionPersistencePolicy {
         let fallback = defaultSidebarWidth
         guard let candidate, candidate.isFinite else { return fallback }
         return min(max(candidate, minimumSidebarWidth), maximumSidebarWidth)
+    }
+
+    static func sanitizedRightPanelWidth(_ candidate: Double?) -> Double {
+        let fallback = defaultRightPanelWidth
+        guard let candidate, candidate.isFinite else { return fallback }
+        return min(max(candidate, minimumRightPanelWidth), maximumRightPanelWidth)
     }
 
     static func truncatedScrollback(_ text: String?) -> String? {
@@ -196,6 +205,11 @@ struct SessionSidebarSnapshot: Codable, Sendable {
     var width: Double?
 }
 
+struct SessionRightPanelSnapshot: Codable, Sendable {
+    var isVisible: Bool
+    var width: Double?
+}
+
 struct SessionStatusEntrySnapshot: Codable, Sendable {
     var key: String
     var value: String
@@ -240,6 +254,10 @@ struct SessionMarkdownPanelSnapshot: Codable, Sendable {
     var filePath: String
 }
 
+struct SessionMemoPanelSnapshot: Codable, Sendable {}
+
+struct SessionHistoryPanelSnapshot: Codable, Sendable {}
+
 struct SessionPanelSnapshot: Codable, Sendable {
     var id: UUID
     var type: PanelType
@@ -254,6 +272,8 @@ struct SessionPanelSnapshot: Codable, Sendable {
     var terminal: SessionTerminalPanelSnapshot?
     var browser: SessionBrowserPanelSnapshot?
     var markdown: SessionMarkdownPanelSnapshot?
+    var memo: SessionMemoPanelSnapshot?
+    var history: SessionHistoryPanelSnapshot?
 }
 
 enum SessionSplitOrientation: String, Codable, Sendable {
@@ -333,6 +353,9 @@ struct SessionWorkspaceSnapshot: Codable, Sendable {
     var customColor: String?
     var isPinned: Bool
     var currentDirectory: String
+    var initialDirectory: String?
+    var memo: String?
+    var memoUpdatedAt: TimeInterval?
     var focusedPanelId: UUID?
     var layout: SessionWorkspaceLayoutSnapshot
     var panels: [SessionPanelSnapshot]
@@ -352,6 +375,7 @@ struct SessionWindowSnapshot: Codable, Sendable {
     var display: SessionDisplaySnapshot?
     var tabManager: SessionTabManagerSnapshot
     var sidebar: SessionSidebarSnapshot
+    var rightPanel: SessionRightPanelSnapshot?
 }
 
 struct AppSessionSnapshot: Codable, Sendable {

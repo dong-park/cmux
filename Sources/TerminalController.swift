@@ -2063,6 +2063,24 @@ class TerminalController {
             return v2Result(id: id, self.v2WorkspaceReorder(params: params))
         case "workspace.rename":
             return v2Result(id: id, self.v2WorkspaceRename(params: params))
+        case "workspace.memo.get":
+            return v2Result(id: id, self.v2WorkspaceMemoGet(params: params))
+        case "workspace.memo.set":
+            return v2Result(id: id, self.v2WorkspaceMemoSet(params: params))
+        case "workspace.memo.append":
+            return v2Result(id: id, self.v2WorkspaceMemoAppend(params: params))
+        case "workspace.memo.clear":
+            return v2Result(id: id, self.v2WorkspaceMemoClear(params: params))
+        case "history.add":
+            return v2Result(id: id, self.v2HistoryAdd(params: params))
+        case "history.list":
+            return v2Result(id: id, self.v2HistoryList(params: params))
+        case "history.summary":
+            return v2Result(id: id, self.v2HistorySummary(params: params))
+        case "history.clear":
+            return v2Result(id: id, self.v2HistoryClear(params: params))
+        case "history.open":
+            return v2Result(id: id, self.v2HistoryOpen(params: params))
         case "workspace.action":
             return v2Result(id: id, self.v2WorkspaceAction(params: params))
         case "workspace.next":
@@ -2441,6 +2459,15 @@ class TerminalController {
             "workspace.move_to_window",
             "workspace.reorder",
             "workspace.rename",
+            "workspace.memo.get",
+            "workspace.memo.set",
+            "workspace.memo.append",
+            "workspace.memo.clear",
+            "history.add",
+            "history.list",
+            "history.summary",
+            "history.clear",
+            "history.open",
             "workspace.action",
             "workspace.next",
             "workspace.previous",
@@ -2996,6 +3023,10 @@ class TerminalController {
             return id
         }
         return nil
+    }
+
+    func paneRef(for paneUUID: UUID) -> String {
+        v2EnsureHandleRef(kind: .pane, uuid: paneUUID)
     }
 
     private func v2Ref(kind: V2HandleKind, uuid: UUID?) -> Any {
@@ -3604,6 +3635,261 @@ class TerminalController {
             "title": title
         ])
     }
+
+    private func v2WorkspaceMemoTarget(params: [String: Any]) -> (tabManager: TabManager, workspace: Workspace)? {
+        if let workspaceId = v2UUID(params, "workspace_id") ?? v2UUID(params, "workspace") {
+            return v2MainSync {
+                guard let manager = AppDelegate.shared?.tabManagerFor(tabId: workspaceId),
+                      let workspace = manager.tabs.first(where: { $0.id == workspaceId }) else {
+                    return nil
+                }
+                return (manager, workspace)
+            }
+        }
+
+        guard let manager = v2ResolveTabManager(params: params) else {
+            return nil
+        }
+        return v2MainSync {
+            guard let workspace = v2ResolveWorkspace(params: params, tabManager: manager) else {
+                return nil
+            }
+            return (manager, workspace)
+        }
+    }
+
+    private func v2WorkspaceMemoISO8601String(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
+    private func v2WorkspaceMemoGet(params: [String: Any]) -> V2CallResult {
+        guard let target = v2WorkspaceMemoTarget(params: params) else {
+            return .err(code: "not_found", message: "Workspace not found", data: nil)
+        }
+
+        let snapshot = v2MainSync {
+            (
+                memo: target.workspace.memo,
+                updatedAt: target.workspace.memoUpdatedAt
+            )
+        }
+        let windowId = v2ResolveWindowId(tabManager: target.tabManager)
+        return .ok([
+            "window_id": v2OrNull(windowId?.uuidString),
+            "window_ref": v2Ref(kind: .window, uuid: windowId),
+            "workspace_id": target.workspace.id.uuidString,
+            "workspace_ref": v2Ref(kind: .workspace, uuid: target.workspace.id),
+            "memo": v2OrNull(snapshot.memo),
+            "updated_at": v2OrNull(v2WorkspaceMemoISO8601String(snapshot.updatedAt))
+        ])
+    }
+
+    private func v2WorkspaceMemoSet(params: [String: Any]) -> V2CallResult {
+        guard let rawMemo = v2RawString(params, "memo"),
+              !rawMemo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .err(code: "invalid_params", message: "Missing or invalid memo", data: nil)
+        }
+        guard let target = v2WorkspaceMemoTarget(params: params) else {
+            return .err(code: "not_found", message: "Workspace not found", data: nil)
+        }
+
+        let updatedAt = v2MainSync {
+            target.workspace.setMemo(rawMemo)
+            return target.workspace.memoUpdatedAt
+        }
+
+        let windowId = v2ResolveWindowId(tabManager: target.tabManager)
+        return .ok([
+            "window_id": v2OrNull(windowId?.uuidString),
+            "window_ref": v2Ref(kind: .window, uuid: windowId),
+            "workspace_id": target.workspace.id.uuidString,
+            "workspace_ref": v2Ref(kind: .workspace, uuid: target.workspace.id),
+            "memo": rawMemo,
+            "updated_at": v2OrNull(v2WorkspaceMemoISO8601String(updatedAt))
+        ])
+    }
+
+    private func v2WorkspaceMemoAppend(params: [String: Any]) -> V2CallResult {
+        guard let rawMemo = v2RawString(params, "memo"),
+              !rawMemo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .err(code: "invalid_params", message: "Missing or invalid memo", data: nil)
+        }
+        guard let target = v2WorkspaceMemoTarget(params: params) else {
+            return .err(code: "not_found", message: "Workspace not found", data: nil)
+        }
+
+        let snapshot = v2MainSync {
+            target.workspace.appendMemo(rawMemo)
+            return (
+                memo: target.workspace.memo,
+                updatedAt: target.workspace.memoUpdatedAt
+            )
+        }
+
+        let windowId = v2ResolveWindowId(tabManager: target.tabManager)
+        return .ok([
+            "window_id": v2OrNull(windowId?.uuidString),
+            "window_ref": v2Ref(kind: .window, uuid: windowId),
+            "workspace_id": target.workspace.id.uuidString,
+            "workspace_ref": v2Ref(kind: .workspace, uuid: target.workspace.id),
+            "memo": v2OrNull(snapshot.memo),
+            "updated_at": v2OrNull(v2WorkspaceMemoISO8601String(snapshot.updatedAt))
+        ])
+    }
+
+    private func v2WorkspaceMemoClear(params: [String: Any]) -> V2CallResult {
+        guard let target = v2WorkspaceMemoTarget(params: params) else {
+            return .err(code: "not_found", message: "Workspace not found", data: nil)
+        }
+
+        v2MainSync {
+            target.workspace.clearMemo()
+        }
+
+        let windowId = v2ResolveWindowId(tabManager: target.tabManager)
+        return .ok([
+            "window_id": v2OrNull(windowId?.uuidString),
+            "window_ref": v2Ref(kind: .window, uuid: windowId),
+            "workspace_id": target.workspace.id.uuidString,
+            "workspace_ref": v2Ref(kind: .workspace, uuid: target.workspace.id)
+        ])
+    }
+
+    // MARK: - Global History
+
+    private func v2HistoryAdd(params: [String: Any]) -> V2CallResult {
+        guard let typeStr = v2RawString(params, "type"),
+              !typeStr.isEmpty else {
+            return .err(code: "invalid_params", message: "Missing required 'type'", data: nil)
+        }
+        guard let summary = v2RawString(params, "summary"),
+              !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .err(code: "invalid_params", message: "Missing required 'summary'", data: nil)
+        }
+
+        let phase = v2RawString(params, "phase")
+        let detail = v2RawString(params, "detail")
+        let tags: [String] = {
+            if let arr = params["tags"] as? [String] { return arr }
+            if let str = v2RawString(params, "tags") {
+                return str.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            }
+            return []
+        }()
+        let cwd = v2RawString(params, "cwd")
+        let workspaceName = v2RawString(params, "workspace_name")
+
+        let entry = GlobalHistory.Entry(
+            type: typeStr,
+            phase: phase,
+            summary: summary,
+            detail: detail,
+            tags: tags,
+            cwd: cwd,
+            workspaceName: workspaceName
+        )
+
+        guard GlobalHistory.add(entry) else {
+            return .err(code: "io_error", message: "Failed to write history", data: nil)
+        }
+
+        return .ok([
+            "id": entry.id.uuidString,
+            "type": entry.type,
+            "summary": entry.summary,
+            "timestamp": ISO8601DateFormatter().string(from: entry.timestamp)
+        ])
+    }
+
+    private func v2HistoryList(params: [String: Any]) -> V2CallResult {
+        let typeFilter = v2RawString(params, "type")
+        let phaseFilter = v2RawString(params, "phase")
+        let tagFilter = v2RawString(params, "tag")
+        let cwdFilter = v2RawString(params, "cwd")
+        let sinceFilter: Date? = {
+            guard let raw = v2RawString(params, "since") else { return nil }
+            // Support relative durations like "7d", "24h", "30m"
+            let scanner = Scanner(string: raw)
+            var value: Double = 0
+            guard scanner.scanDouble(&value) else { return nil }
+            let remaining = String(raw[scanner.currentIndex...]).lowercased()
+            let seconds: TimeInterval
+            switch remaining {
+            case "d": seconds = value * 86400
+            case "h": seconds = value * 3600
+            case "m": seconds = value * 60
+            default: return nil
+            }
+            return Date().addingTimeInterval(-seconds)
+        }()
+        let limitValue = params["limit"] as? Int ?? 50
+
+        let entries = GlobalHistory.list(
+            type: typeFilter,
+            phase: phaseFilter,
+            tag: tagFilter,
+            cwd: cwdFilter,
+            since: sinceFilter,
+            limit: limitValue
+        )
+
+        let formatter = ISO8601DateFormatter()
+        let items: [[String: Any]] = entries.map { entry in
+            var item: [String: Any] = [
+                "id": entry.id.uuidString,
+                "type": entry.type,
+                "summary": entry.summary,
+                "tags": entry.tags,
+                "timestamp": formatter.string(from: entry.timestamp)
+            ]
+            if let phase = entry.phase { item["phase"] = phase }
+            if let detail = entry.detail { item["detail"] = detail }
+            if let cwd = entry.cwd { item["cwd"] = cwd }
+            if let name = entry.workspaceName { item["workspace_name"] = name }
+            return item
+        }
+
+        return .ok([
+            "count": items.count,
+            "entries": items
+        ])
+    }
+
+    private func v2HistorySummary(params: [String: Any]) -> V2CallResult {
+        let summaryText = GlobalHistory.summary()
+        return .ok([
+            "summary": summaryText
+        ])
+    }
+
+    private func v2HistoryClear(params: [String: Any]) -> V2CallResult {
+        guard GlobalHistory.clear() else {
+            return .err(code: "io_error", message: "Failed to clear history", data: nil)
+        }
+        return .ok(["status": "cleared"])
+    }
+
+    private func v2HistoryOpen(params: [String: Any]) -> V2CallResult {
+        guard let tabManager = v2ResolveTabManager(params: params) else {
+            return .err(code: "unavailable", message: "TabManager not available", data: nil)
+        }
+
+        let panelId = v2MainSync {
+            tabManager.openHistorySurface()
+        }
+
+        guard let panelId else {
+            return .err(code: "failed", message: "Could not open history panel", data: nil)
+        }
+
+        return .ok([
+            "panel_id": panelId.uuidString
+        ])
+    }
+
     private func v2WorkspaceNext(params: [String: Any]) -> V2CallResult {
         guard let tabManager = v2ResolveTabManager(params: params) else {
             return .err(code: "unavailable", message: "TabManager not available", data: nil)

@@ -182,3 +182,165 @@ final class MarkdownPanel: Panel, ObservableObject {
         fileWatchSource?.cancel()
     }
 }
+
+@MainActor
+final class MemoPanel: Panel, ObservableObject {
+    let id: UUID
+    let panelType: PanelType = .memo
+
+    @Published private(set) var displayTitle: String
+    @Published private(set) var content: String
+    @Published private(set) var updatedAt: Date?
+    @Published private(set) var focusFlashToken: Int = 0
+    @Published var focusRequestToken: UInt64 = 0
+
+    private(set) var workspaceId: UUID
+    private weak var workspace: Workspace?
+    private var workspaceSubscription: AnyCancellable?
+    private var isEditing = false
+
+    var displayIcon: String? { "note.text" }
+
+    init(workspace: Workspace) {
+        self.id = UUID()
+        self.workspaceId = workspace.id
+        self.workspace = workspace
+        self.displayTitle = String(localized: "workspace.memo.panelTitle", defaultValue: "Memo")
+        self.content = workspace.memo ?? ""
+        self.updatedAt = workspace.memoUpdatedAt
+        bind(to: workspace)
+    }
+
+    func updateWorkspace(_ workspace: Workspace) {
+        workspaceId = workspace.id
+        self.workspace = workspace
+        bind(to: workspace)
+    }
+
+    func focus() {
+        focusRequestToken &+= 1
+    }
+
+    func unfocus() {
+        endEditing()
+    }
+
+    func close() {
+        persistContent()
+    }
+
+    func triggerFlash(reason: WorkspaceAttentionFlashReason) {
+        _ = reason
+        guard NotificationPaneFlashSettings.isEnabled() else { return }
+        focusFlashToken += 1
+    }
+
+    func beginEditing() {
+        isEditing = true
+    }
+
+    func endEditing() {
+        isEditing = false
+        persistContent()
+    }
+
+    func updateContentFromEditor(_ newContent: String) {
+        guard content != newContent else { return }
+        content = newContent
+    }
+
+    private func bind(to workspace: Workspace) {
+        workspaceSubscription = Publishers.CombineLatest(
+            workspace.$memo.removeDuplicates(),
+            workspace.$memoUpdatedAt.removeDuplicates()
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] memo, updatedAt in
+            guard let self else { return }
+            self.updatedAt = updatedAt
+            guard !self.isEditing else { return }
+            let nextContent = memo ?? ""
+            if self.content != nextContent {
+                self.content = nextContent
+            }
+        }
+    }
+
+    private func persistContent() {
+        guard let workspace else { return }
+        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if workspace.memo != nil {
+                workspace.clearMemo()
+            }
+        } else if workspace.memo != content {
+            workspace.setMemo(content)
+        }
+        updatedAt = workspace.memoUpdatedAt
+    }
+}
+
+@MainActor
+final class HistoryPanel: Panel, ObservableObject {
+    let id: UUID
+    let panelType: PanelType = .history
+
+    @Published private(set) var displayTitle: String
+    @Published private(set) var entries: [GlobalHistory.Entry] = []
+    @Published private(set) var focusFlashToken: Int = 0
+    @Published var focusRequestToken: UInt64 = 0
+
+    @Published var filterType: String?
+    @Published var filterPhase: String?
+    @Published var filterTag: String?
+
+    var displayIcon: String? { "clock.arrow.circlepath" }
+
+    private var refreshTimer: Timer?
+
+    init() {
+        self.id = UUID()
+        self.displayTitle = String(localized: "history.panelTitle", defaultValue: "History")
+        reload()
+    }
+
+    func focus() {
+        focusRequestToken &+= 1
+        reload()
+    }
+
+    func unfocus() {}
+
+    func close() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+
+    func triggerFlash(reason: WorkspaceAttentionFlashReason) {
+        _ = reason
+        guard NotificationPaneFlashSettings.isEnabled() else { return }
+        focusFlashToken += 1
+    }
+
+    func reload() {
+        entries = GlobalHistory.list(
+            type: filterType,
+            phase: filterPhase,
+            tag: filterTag,
+            limit: 200
+        )
+    }
+
+    func applyFilter(type: String?, phase: String?, tag: String?) {
+        filterType = type
+        filterPhase = phase
+        filterTag = tag
+        reload()
+    }
+
+    func clearFilter() {
+        filterType = nil
+        filterPhase = nil
+        filterTag = nil
+        reload()
+    }
+}

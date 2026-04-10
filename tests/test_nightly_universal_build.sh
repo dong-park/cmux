@@ -44,8 +44,8 @@ if ! grep -Fq 'com.cmuxterm.app.nightly.universal' "$WORKFLOW_FILE"; then
   exit 1
 fi
 
-if ! grep -Fq 'https://github.com/manaflow-ai/cmux/releases/download/nightly/appcast-universal.xml' "$WORKFLOW_FILE"; then
-  echo "FAIL: nightly workflow must publish a separate universal appcast feed"
+if ! grep -Fq 'https://github.com/${{ github.repository }}/releases/download/nightly/appcast.xml' "$WORKFLOW_FILE"; then
+  echo "FAIL: nightly workflow must point the nightly app at the fork-local GitHub appcast feed"
   exit 1
 fi
 

@@ -15,6 +15,35 @@ if [[ ! -f "$PROJECT_FILE" ]]; then
   exit 1
 fi
 
+resolve_release_repo() {
+  if [[ -n "${CMUX_RELEASE_REPO:-}" ]]; then
+    printf '%s\n' "$CMUX_RELEASE_REPO"
+    return
+  fi
+
+  local remote_url
+  remote_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+  case "$remote_url" in
+    git@github.com:*)
+      remote_url="${remote_url#git@github.com:}"
+      ;;
+    https://github.com/*)
+      remote_url="${remote_url#https://github.com/}"
+      ;;
+    http://github.com/*)
+      remote_url="${remote_url#http://github.com/}"
+      ;;
+  esac
+  remote_url="${remote_url%.git}"
+  printf '%s\n' "$remote_url"
+}
+
+RELEASE_REPO="$(resolve_release_repo)"
+if [[ ! "$RELEASE_REPO" =~ .+/.+ ]]; then
+  echo "Error: could not resolve GitHub release repo. Set CMUX_RELEASE_REPO=owner/repo." >&2
+  exit 1
+fi
+
 # Get current versions
 CURRENT_MARKETING=$(grep -m1 'MARKETING_VERSION = ' "$PROJECT_FILE" | sed 's/.*= \(.*\);/\1/')
 CURRENT_BUILD=$(grep -m1 'CURRENT_PROJECT_VERSION = ' "$PROJECT_FILE" | sed 's/.*= \(.*\);/\1/')
@@ -25,7 +54,7 @@ echo "Current: MARKETING_VERSION=$CURRENT_MARKETING, CURRENT_PROJECT_VERSION=$CU
 # Keep Sparkle build numbers monotonic with the latest published stable appcast.
 # If local build numbers have fallen behind due merges/rebases, auto-correct upward.
 LATEST_RELEASE_BUILD="$(
-  curl -fsSL --max-time 8 https://github.com/manaflow-ai/cmux/releases/latest/download/appcast.xml 2>/dev/null \
+  curl -fsSL --max-time 8 "https://github.com/${RELEASE_REPO}/releases/latest/download/appcast.xml" 2>/dev/null \
     | sed -n 's#.*<sparkle:version>\([0-9][0-9]*\)</sparkle:version>.*#\1#p' \
     | head -n1
 )"

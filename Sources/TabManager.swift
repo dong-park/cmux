@@ -3656,6 +3656,44 @@ class TabManager: ObservableObject {
         selectedWorkspace?.newTerminalSurfaceInFocusedPane(focus: true)
     }
 
+    @discardableResult
+    func openMemoSurface(in workspaceId: UUID? = nil) -> UUID? {
+        let targetWorkspace: Workspace
+        if let workspaceId {
+            guard let workspace = tabs.first(where: { $0.id == workspaceId }) else { return nil }
+            targetWorkspace = workspace
+        } else {
+            guard let workspace = selectedWorkspace else { return nil }
+            targetWorkspace = workspace
+        }
+
+        if selectedTabId != targetWorkspace.id {
+            selectWorkspace(targetWorkspace)
+        }
+
+        targetWorkspace.clearSplitZoom()
+        return targetWorkspace.openOrFocusMemoSurface(focus: true)?.id
+    }
+
+    @discardableResult
+    func openHistorySurface(in workspaceId: UUID? = nil) -> UUID? {
+        let targetWorkspace: Workspace
+        if let workspaceId {
+            guard let workspace = tabs.first(where: { $0.id == workspaceId }) else { return nil }
+            targetWorkspace = workspace
+        } else {
+            guard let workspace = selectedWorkspace else { return nil }
+            targetWorkspace = workspace
+        }
+
+        if selectedTabId != targetWorkspace.id {
+            selectWorkspace(targetWorkspace)
+        }
+
+        targetWorkspace.clearSplitZoom()
+        return targetWorkspace.openOrFocusHistorySurface(focus: true)?.id
+    }
+
     // MARK: - Split Creation
 
     /// Create a new split in the current tab
@@ -5494,6 +5532,8 @@ extension TabManager {
             hasher.combine(workspace.customTitle ?? "")
             hasher.combine(workspace.customColor ?? "")
             hasher.combine(workspace.isPinned)
+            hasher.combine(workspace.memo ?? "")
+            hasher.combine(workspace.memoUpdatedAt?.timeIntervalSince1970 ?? 0)
             hasher.combine(workspace.panels.count)
             hasher.combine(workspace.statusEntries.count)
             hasher.combine(workspace.metadataBlocks.count)
@@ -5583,7 +5623,7 @@ extension TabManager {
             Self.nextPortOrdinal += 1
             let workspace = Workspace(
                 title: workspaceSnapshot.processTitle,
-                workingDirectory: workspaceSnapshot.currentDirectory,
+                workingDirectory: workspaceSnapshot.initialDirectory ?? workspaceSnapshot.currentDirectory,
                 portOrdinal: ordinal
             )
             workspace.owningTabManager = self

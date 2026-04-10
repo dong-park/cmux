@@ -50,6 +50,35 @@ SIGN_HASH="A050CC7E193C8221BDBA204E731B046CDCCC1B30"
 ENTITLEMENTS="cmux.entitlements"
 APP_PATH="build/Build/Products/Release/cmux.app"
 
+resolve_release_repo() {
+  if [[ -n "${CMUX_RELEASE_REPO:-}" ]]; then
+    printf '%s\n' "$CMUX_RELEASE_REPO"
+    return
+  fi
+
+  local remote_url
+  remote_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+  case "$remote_url" in
+    git@github.com:*)
+      remote_url="${remote_url#git@github.com:}"
+      ;;
+    https://github.com/*)
+      remote_url="${remote_url#https://github.com/}"
+      ;;
+    http://github.com/*)
+      remote_url="${remote_url#http://github.com/}"
+      ;;
+  esac
+  remote_url="${remote_url%.git}"
+  printf '%s\n' "$remote_url"
+}
+
+RELEASE_REPO="$(resolve_release_repo)"
+if [[ ! "$RELEASE_REPO" =~ .+/.+ ]]; then
+  echo "Could not resolve GitHub release repo. Set CMUX_RELEASE_REPO=owner/repo." >&2
+  exit 1
+fi
+
 # --- Pre-flight ---
 source ~/.secrets/cmuxterm.env
 export SPARKLE_PRIVATE_KEY
@@ -86,8 +115,10 @@ SPARKLE_PUBLIC_KEY_DERIVED=$(swift scripts/derive_sparkle_public_key.swift "$SPA
 APP_PLIST="$APP_PATH/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Delete :SUPublicEDKey" "$APP_PLIST" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$APP_PLIST" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Delete :CMUXGitHubRepository" "$APP_PLIST" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_KEY_DERIVED" "$APP_PLIST"
-/usr/libexec/PlistBuddy -c "Add :SUFeedURL string https://github.com/manaflow-ai/cmux/releases/latest/download/appcast.xml" "$APP_PLIST"
+/usr/libexec/PlistBuddy -c "Add :SUFeedURL string https://github.com/${RELEASE_REPO}/releases/latest/download/appcast.xml" "$APP_PLIST"
+/usr/libexec/PlistBuddy -c "Add :CMUXGitHubRepository string ${RELEASE_REPO}" "$APP_PLIST"
 echo "Sparkle keys injected"
 
 # --- Codesign ---
@@ -173,10 +204,10 @@ cask "cmux" do
   version "${VERSION}"
   sha256 "${DMG_SHA256}"
 
-  url "https://github.com/manaflow-ai/cmux/releases/download/v#{version}/cmux-macos.dmg"
+  url "https://github.com/${RELEASE_REPO}/releases/download/v#{version}/cmux-macos.dmg"
   name "cmux"
   desc "Lightweight native macOS terminal with vertical tabs for AI coding agents"
-  homepage "https://github.com/manaflow-ai/cmux"
+  homepage "https://github.com/${RELEASE_REPO}"
 
   livecheck do
     url :url

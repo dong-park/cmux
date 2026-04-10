@@ -13,6 +13,7 @@ struct GhosttyConfig {
 
     var fontFamily: String = "Menlo"
     var fontSize: CGFloat = 12
+    var fontStyle: String = ""
     var theme: String?
     var workingDirectory: String?
     var scrollbackLimit: Int = 10000
@@ -242,6 +243,8 @@ struct GhosttyConfig {
                     if let size = Double(value) {
                         fontSize = CGFloat(size)
                     }
+                case "font-style":
+                    fontStyle = value
                 case "theme":
                     theme = value
                 case "working-directory":

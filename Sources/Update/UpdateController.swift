@@ -98,6 +98,12 @@ class UpdateController {
 
     /// Start the updater. If startup fails, the error is shown via the custom UI.
     func startUpdaterIfNeeded() {
+        #if DEBUG
+        // DEV 빌드에서는 업데이트 체크를 완전히 비활성화
+        if ProcessInfo.processInfo.environment["CMUX_UI_TEST_TRIGGER_UPDATE_CHECK"] != "1" {
+            return
+        }
+        #endif
         guard !didStartUpdater else { return }
         ensureSparkleInstallationCache()
 #if DEBUG

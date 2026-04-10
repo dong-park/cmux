@@ -2015,6 +2015,22 @@ struct CMUXCLI {
             let payload = try client.sendV2(method: "workspace.rename", params: params)
             printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: v2OKSummary(payload, idFormat: idFormat, kinds: ["workspace"]))
 
+        case "workspace-memo":
+            try runWorkspaceMemo(
+                commandArgs: commandArgs,
+                client: client,
+                jsonOutput: jsonOutput,
+                idFormat: idFormat,
+                windowOverride: windowId
+            )
+
+        case "history":
+            try runHistory(
+                commandArgs: commandArgs,
+                client: client,
+                jsonOutput: jsonOutput
+            )
+
         case "current-workspace":
             let response = try sendV1Command("current_workspace", client: client)
             if jsonOutput {
@@ -6707,6 +6723,67 @@ struct CMUXCLI {
               cmux rename-workspace "backend logs"
               cmux rename-window --workspace workspace:2 "agent run"
             """
+        case "workspace-memo":
+            return """
+            Usage: cmux workspace-memo <get|set|append|clear> [flags]
+
+            Read or write a Markdown memo for a workspace. Defaults to the current workspace.
+
+            Subcommands:
+              get                          Print the current memo
+              set [--file <path>] <text>   Set the memo from text or a file
+              append [--file <path>] <text>
+                                           Append text or a file to the existing memo
+              clear                        Remove the memo
+
+            Flags:
+              --workspace <id|ref|index>   Workspace context (default: current/$CMUX_WORKSPACE_ID)
+              --file <path>                Read memo contents from a file (set only)
+
+            Example:
+              cmux workspace-memo get
+              cmux workspace-memo set "## TODO\n- [ ] API integration"
+              cmux workspace-memo append "\n- [ ] Add tests"
+              cmux workspace-memo set --workspace workspace:2 --file ./notes.md
+              cmux workspace-memo clear
+            """
+        case "history":
+            return """
+            Usage: cmux history <add|list|summary|clear> [flags]
+
+            App-wide history that accumulates across workspaces and sessions.
+            Stored in ~/Documents/cmux/history.json.
+
+            Subcommands:
+              add --type <type> --summary <text> [flags]   Add an entry
+              list [flags]                                  List entries (newest first)
+              summary                                       One-line summary of all entries
+              clear                                         Remove all entries
+              open                                          Open history panel in current workspace
+
+            Add flags:
+              --type <type>         Entry type: decision, task, feedback, pattern, phase, note
+              --summary <text>      One-line summary (required)
+              --phase <phase>       Phase context: spec, plan, build, test, review, ship, feedback
+              --detail <text>       Extended description
+              --tags <t1,t2,...>    Comma-separated tags
+
+            List flags:
+              --type <type>         Filter by type
+              --phase <phase>       Filter by phase
+              --tag <tag>           Filter by tag
+              --cwd <path|.>        Filter by project directory (. = current workspace cwd)
+              --since <duration>    Filter by time: 7d, 24h, 30m
+              --limit <n>           Max entries (default: 50)
+
+            Example:
+              cmux history add --type decision --summary "Redis TTL 300s" --tags D1,cache
+              cmux history add --type pattern --summary "Always specify TTL rationale in spec"
+              cmux history list --type pattern
+              cmux history list --tag D1
+              cmux history list --cwd . --since 7d
+              cmux history summary
+            """
         case "current-workspace":
             return """
             Usage: cmux current-workspace
@@ -7470,6 +7547,240 @@ struct CMUXCLI {
         }
 
         return Bundle.main.resourceURL?.appendingPathComponent("ghostty", isDirectory: true)
+    }
+
+    private func runHistory(
+        commandArgs: [String],
+        client: SocketClient,
+        jsonOutput: Bool
+    ) throws {
+        guard let subcommand = commandArgs.first?.lowercased() else {
+            throw CLIError(message: "history requires a subcommand: add, list, summary, clear, or open")
+        }
+
+        let restArgs = Array(commandArgs.dropFirst())
+
+        switch subcommand {
+        case "add":
+            let (typeOpt, r1) = parseOption(restArgs, name: "--type")
+            let (summaryOpt, r2) = parseOption(r1, name: "--summary")
+            let (phaseOpt, r3) = parseOption(r2, name: "--phase")
+            let (detailOpt, r4) = parseOption(r3, name: "--detail")
+            let (tagsOpt, _) = parseOption(r4, name: "--tags")
+
+            guard let typeVal = typeOpt, !typeVal.isEmpty else {
+                throw CLIError(message: "history add requires --type")
+            }
+
+            let summaryVal: String
+            if let s = summaryOpt, !s.isEmpty {
+                summaryVal = s
+            } else {
+                // Remaining positional args as summary
+                let positionals = r4.filter { !$0.starts(with: "--") }
+                guard !positionals.isEmpty else {
+                    throw CLIError(message: "history add requires --summary <text>")
+                }
+                summaryVal = positionals.joined(separator: " ")
+            }
+
+            var params: [String: Any] = [
+                "type": typeVal,
+                "summary": summaryVal
+            ]
+            if let phase = phaseOpt { params["phase"] = phase }
+            if let detail = detailOpt { params["detail"] = detail }
+            if let tags = tagsOpt { params["tags"] = tags }
+
+            let payload = try client.sendV2(method: "history.add", params: params)
+            if jsonOutput {
+                print(jsonString(payload))
+            } else {
+                printV2Payload(payload, jsonOutput: false, idFormat: .refs, fallbackText: "OK")
+            }
+
+        case "list":
+            var params: [String: Any] = [:]
+            let (typeOpt, r1) = parseOption(restArgs, name: "--type")
+            let (phaseOpt, r2) = parseOption(r1, name: "--phase")
+            let (tagOpt, r3) = parseOption(r2, name: "--tag")
+            let (cwdOpt, r4) = parseOption(r3, name: "--cwd")
+            let (sinceOpt, r5) = parseOption(r4, name: "--since")
+            let (limitOpt, _) = parseOption(r5, name: "--limit")
+
+            if let t = typeOpt { params["type"] = t }
+            if let p = phaseOpt { params["phase"] = p }
+            if let t = tagOpt { params["tag"] = t }
+            if let c = cwdOpt { params["cwd"] = c }
+            if let s = sinceOpt { params["since"] = s }
+            if let l = limitOpt, let n = Int(l) { params["limit"] = n }
+
+            let payload = try client.sendV2(method: "history.list", params: params)
+            if jsonOutput {
+                print(jsonString(payload))
+            } else {
+                guard let result = payload["result"] as? [String: Any],
+                      let entries = result["entries"] as? [[String: Any]] else {
+                    print("No entries")
+                    return
+                }
+                if entries.isEmpty {
+                    print("No entries")
+                    return
+                }
+                for entry in entries {
+                    let ts = (entry["timestamp"] as? String) ?? ""
+                    let shortTs = String(ts.prefix(10))
+                    let type = (entry["type"] as? String) ?? ""
+                    let summary = (entry["summary"] as? String) ?? ""
+                    let phase = (entry["phase"] as? String).map { " [\($0)]" } ?? ""
+                    let tags = (entry["tags"] as? [String]) ?? []
+                    let tagStr = tags.isEmpty ? "" : " tags:[\(tags.joined(separator: ","))]"
+                    print("[\(shortTs)] \(type)\(phase): \(summary)\(tagStr)")
+                }
+            }
+
+        case "summary":
+            let payload = try client.sendV2(method: "history.summary", params: [:])
+            if jsonOutput {
+                print(jsonString(payload))
+            } else if let result = payload["result"] as? [String: Any],
+                      let summary = result["summary"] as? String {
+                print(summary)
+            }
+
+        case "clear":
+            let payload = try client.sendV2(method: "history.clear", params: [:])
+            if jsonOutput {
+                print(jsonString(payload))
+            } else {
+                print("OK")
+            }
+
+        case "open":
+            let payload = try client.sendV2(method: "history.open", params: [:])
+            if jsonOutput {
+                print(jsonString(payload))
+            } else {
+                printV2Payload(payload, jsonOutput: false, idFormat: .refs, fallbackText: "OK")
+            }
+
+        default:
+            throw CLIError(message: "Unknown history subcommand: \(subcommand). Use add, list, summary, clear, or open.")
+        }
+    }
+
+    private func runWorkspaceMemo(
+        commandArgs: [String],
+        client: SocketClient,
+        jsonOutput: Bool,
+        idFormat: CLIIDFormat,
+        windowOverride: String?
+    ) throws {
+        guard let subcommand = commandArgs.first?.lowercased() else {
+            throw CLIError(message: "workspace-memo requires a subcommand: get, set, append, or clear")
+        }
+
+        func workspaceParams(from args: [String]) throws -> (workspaceId: String?, remaining: [String]) {
+            let (workspaceOpt, remaining) = parseOption(args, name: "--workspace")
+            let workspaceArg = workspaceOpt ?? (windowOverride == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
+            let workspaceId = try normalizeWorkspaceHandle(workspaceArg, client: client, allowCurrent: true)
+            return (workspaceId, remaining)
+        }
+
+        func memoTextForWrite(
+            subcommand: String,
+            args: [String]
+        ) throws -> (workspaceId: String?, memoText: String) {
+            let parsedWorkspace = try workspaceParams(from: args)
+            let (fileOpt, remaining) = parseOption(parsedWorkspace.remaining, name: "--file")
+            let positionals = remaining.dropFirst(remaining.first == "--" ? 1 : 0)
+            if let unknown = positionals.first(where: { $0.hasPrefix("--") }) {
+                throw CLIError(message: "workspace-memo \(subcommand): unknown flag '\(unknown)'")
+            }
+            if fileOpt != nil, !positionals.isEmpty {
+                throw CLIError(message: "workspace-memo \(subcommand) accepts either --file or inline text, not both")
+            }
+
+            let memoText: String
+            if let fileOpt {
+                let resolvedPath = resolvePath(fileOpt)
+                do {
+                    memoText = try String(contentsOfFile: resolvedPath, encoding: .utf8)
+                } catch {
+                    throw CLIError(message: "workspace-memo \(subcommand): failed to read file '\(resolvedPath)'")
+                }
+            } else {
+                memoText = positionals.joined(separator: " ")
+            }
+
+            if memoText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw CLIError(message: "workspace-memo \(subcommand) requires non-empty memo text")
+            }
+
+            return (parsedWorkspace.workspaceId, memoText)
+        }
+
+        switch subcommand {
+        case "get":
+            let parsed = try workspaceParams(from: Array(commandArgs.dropFirst()))
+            let unexpected = parsed.remaining.filter { $0 != "--" }
+            if let unknown = unexpected.first(where: { $0.hasPrefix("--") }) {
+                throw CLIError(message: "workspace-memo get: unknown flag '\(unknown)'")
+            }
+            if !unexpected.isEmpty {
+                throw CLIError(message: "workspace-memo get does not take positional arguments")
+            }
+
+            var params: [String: Any] = [:]
+            if let workspaceId = parsed.workspaceId {
+                params["workspace_id"] = workspaceId
+            }
+            let payload = try client.sendV2(method: "workspace.memo.get", params: params)
+            if jsonOutput {
+                print(jsonString(formatIDs(payload, mode: idFormat)))
+            } else if let memo = payload["memo"] as? String {
+                print(memo)
+            }
+
+        case "set":
+            let write = try memoTextForWrite(subcommand: "set", args: Array(commandArgs.dropFirst()))
+            var params: [String: Any] = ["memo": write.memoText]
+            if let workspaceId = write.workspaceId {
+                params["workspace_id"] = workspaceId
+            }
+            let payload = try client.sendV2(method: "workspace.memo.set", params: params)
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        case "append":
+            let write = try memoTextForWrite(subcommand: "append", args: Array(commandArgs.dropFirst()))
+            var params: [String: Any] = ["memo": write.memoText]
+            if let workspaceId = write.workspaceId {
+                params["workspace_id"] = workspaceId
+            }
+            let payload = try client.sendV2(method: "workspace.memo.append", params: params)
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        case "clear":
+            let parsed = try workspaceParams(from: Array(commandArgs.dropFirst()))
+            let unexpected = parsed.remaining.filter { $0 != "--" }
+            if let unknown = unexpected.first(where: { $0.hasPrefix("--") }) {
+                throw CLIError(message: "workspace-memo clear: unknown flag '\(unknown)'")
+            }
+            if !unexpected.isEmpty {
+                throw CLIError(message: "workspace-memo clear does not take positional arguments")
+            }
+
+            var params: [String: Any] = [:]
+            if let workspaceId = parsed.workspaceId {
+                params["workspace_id"] = workspaceId
+            }
+            let payload = try client.sendV2(method: "workspace.memo.clear", params: params)
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        default:
+            throw CLIError(message: "Unknown workspace-memo subcommand '\(subcommand)'. Use get, set, append, or clear.")
+        }
     }
 
     private func runThemes(commandArgs: [String], jsonOutput: Bool) throws {
@@ -13314,6 +13625,7 @@ struct CMUXCLI {
           close-workspace --workspace <id|ref>
           select-workspace --workspace <id|ref>
           rename-workspace [--workspace <id|ref>] <title>
+          workspace-memo <get|set|append|clear> [--workspace <id|ref|index>] [--file <path>] [text]
           rename-window [--workspace <id|ref>] <title>
           current-workspace
           read-screen [--workspace <id|ref>] [--surface <id|ref>] [--scrollback] [--lines <n>]

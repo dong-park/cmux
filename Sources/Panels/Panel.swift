@@ -7,6 +7,8 @@ public enum PanelType: String, Codable, Sendable {
     case terminal
     case browser
     case markdown
+    case memo
+    case history
 }
 
 public enum TerminalPanelFocusIntent: Equatable {

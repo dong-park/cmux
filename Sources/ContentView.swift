@@ -1574,8 +1574,12 @@ struct ContentView: View {
     @EnvironmentObject var notificationStore: TerminalNotificationStore
     @EnvironmentObject var sidebarState: SidebarState
     @EnvironmentObject var sidebarSelectionState: SidebarSelectionState
+    @EnvironmentObject var rightPanelState: RightPanelState
     @EnvironmentObject var cmuxConfigStore: CmuxConfigStore
+    @StateObject private var gitChangesService = GitChangesService()
     @State private var sidebarWidth: CGFloat = 200
+    @State private var rightPanelWidth: CGFloat = 300
+    @State private var rightPanelDragStartWidth: CGFloat?
     @State private var hoveredResizerHandles: Set<SidebarResizerHandle> = []
     @State private var isResizerDragging = false
     @State private var sidebarDragStartWidth: CGFloat?
@@ -1758,7 +1762,7 @@ struct ContentView: View {
     }
 
     static func tmuxWorkspacePaneExactRect(
-        for panel: Panel,
+        for panel: any Panel,
         in contentView: NSView
     ) -> CGRect? {
         let targetView: NSView?
@@ -2473,6 +2477,12 @@ struct ContentView: View {
                     anchorView: fullscreenControlsViewModel.notificationsAnchorView
                 )
             },
+            onOpenFolder: { [fullscreenControlsViewModel] in
+                AppDelegate.shared?.showOpenFolderPanel(
+                    preferredWindow: fullscreenControlsViewModel.hostWindow,
+                    placementOverride: .end
+                )
+            },
             onNewTab: { tabManager.addTab() },
             visibilityMode: .alwaysVisible
         )
@@ -2620,6 +2630,76 @@ struct ContentView: View {
         return dir.isEmpty ? nil : dir
     }
 
+    private var rightPanelDirectory: String? {
+        guard let tab = tabManager.selectedWorkspace else { return nil }
+        let dir = tab.currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        return dir.isEmpty ? nil : dir
+    }
+
+    private var rightPanelView: some View {
+        GitChangesPanel(
+            gitService: gitChangesService,
+            directory: rightPanelDirectory,
+            onRefresh: { [weak gitChangesService] in
+                guard let service = gitChangesService, let dir = rightPanelDirectory else { return }
+                service.forceRefresh(directory: dir)
+            }
+        )
+        .frame(width: rightPanelWidth)
+        .frame(maxHeight: .infinity)
+    }
+
+    private var rightPanelResizerOverlay: some View {
+        GeometryReader { proxy in
+            let totalWidth = max(0, proxy.size.width)
+            let rpWidth = rightPanelState.isVisible ? rightPanelWidth : 0
+            let dividerX = max(0, totalWidth - rpWidth)
+
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: max(0, dividerX - SidebarResizeInteraction.contentSideHitWidth))
+                    .allowsHitTesting(false)
+
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: SidebarResizeInteraction.totalHitWidth)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                let startWidth = rightPanelDragStartWidth ?? rightPanelWidth
+                                if rightPanelDragStartWidth == nil {
+                                    rightPanelDragStartWidth = rightPanelWidth
+                                }
+                                let nextWidth = min(
+                                    max(startWidth - value.translation.width, CGFloat(SessionPersistencePolicy.minimumRightPanelWidth)),
+                                    CGFloat(SessionPersistencePolicy.maximumRightPanelWidth)
+                                )
+                                withTransaction(Transaction(animation: nil)) {
+                                    rightPanelWidth = nextWidth
+                                }
+                            }
+                            .onEnded { _ in
+                                rightPanelDragStartWidth = nil
+                                rightPanelState.persistedWidth = rightPanelWidth
+                            }
+                    )
+
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .allowsHitTesting(false)
+            }
+            .frame(width: totalWidth, height: proxy.size.height, alignment: .leading)
+        }
+    }
+
     private var contentAndSidebarLayout: AnyView {
         let layout: AnyView
         // When matching terminal background, use HStack so both sidebar and terminal
@@ -2633,8 +2713,14 @@ struct ContentView: View {
                 ZStack(alignment: .leading) {
                     terminalContentWithSidebarDropOverlay
                         .padding(.leading, sidebarState.isVisible ? sidebarWidth : 0)
+                        .padding(.trailing, rightPanelState.isVisible ? rightPanelWidth : 0)
                     if sidebarState.isVisible {
                         sidebarView
+                    }
+                }
+                .overlay(alignment: .trailing) {
+                    if rightPanelState.isVisible {
+                        rightPanelView
                     }
                 }
             )
@@ -2646,6 +2732,9 @@ struct ContentView: View {
                         sidebarView
                     }
                     terminalContentWithSidebarDropOverlay
+                    if rightPanelState.isVisible {
+                        rightPanelView
+                    }
                 }
             )
         }
@@ -2655,6 +2744,12 @@ struct ContentView: View {
                 .overlay(alignment: .leading) {
                     if sidebarState.isVisible {
                         sidebarResizerOverlay
+                            .zIndex(1000)
+                    }
+                }
+                .overlay {
+                    if rightPanelState.isVisible {
+                        rightPanelResizerOverlay
                             .zIndex(1000)
                     }
                 }
@@ -2687,6 +2782,10 @@ struct ContentView: View {
             }
             if abs(sidebarState.persistedWidth - restoredWidth) > 0.5 {
                 sidebarState.persistedWidth = restoredWidth
+            }
+            let restoredRightPanelWidth = CGFloat(SessionPersistencePolicy.sanitizedRightPanelWidth(Double(rightPanelState.persistedWidth)))
+            if abs(rightPanelWidth - restoredRightPanelWidth) > 0.5 {
+                rightPanelWidth = restoredRightPanelWidth
             }
             if selectedTabIds.isEmpty, let selectedId = tabManager.selectedTabId {
                 selectedTabIds = [selectedId]
@@ -3228,10 +3327,24 @@ struct ContentView: View {
                 windowId: windowId,
                 tabManager: tabManager,
                 sidebarState: sidebarState,
-                sidebarSelectionState: sidebarSelectionState
+                sidebarSelectionState: sidebarSelectionState,
+                rightPanelState: rightPanelState
             )
             installFileDropOverlay(on: window, tabManager: tabManager)
         }))
+
+        view = AnyView(view
+            .onChange(of: rightPanelState.isVisible) {
+                if rightPanelState.isVisible, let dir = rightPanelDirectory {
+                    gitChangesService.forceRefresh(directory: dir)
+                }
+            }
+            .onChange(of: tabManager.selectedTabId) {
+                if rightPanelState.isVisible, let dir = rightPanelDirectory {
+                    gitChangesService.refresh(directory: dir)
+                }
+            }
+        )
 
         return view
     }
@@ -5071,6 +5184,10 @@ struct ContentView: View {
             return String(localized: "commandPalette.kind.browser", defaultValue: "Browser")
         case .markdown:
             return String(localized: "commandPalette.kind.markdown", defaultValue: "Markdown")
+        case .memo:
+            return String(localized: "commandPalette.kind.memo", defaultValue: "Memo")
+        case .history:
+            return String(localized: "commandPalette.kind.history", defaultValue: "History")
         }
     }
 
@@ -5082,6 +5199,10 @@ struct ContentView: View {
             return ["browser", "web", "page"]
         case .markdown:
             return ["markdown", "note", "preview"]
+        case .memo:
+            return ["memo", "note", "notepad"]
+        case .history:
+            return ["history", "log", "timeline"]
         }
     }
 
@@ -8691,6 +8812,7 @@ struct VerticalTabsSidebar: View {
     @StateObject private var tabItemSettingsStore = SidebarTabItemSettingsStore()
     @State private var draggedTabId: UUID?
     @State private var dropIndicator: SidebarDropIndicator?
+    @State private var collapsedGroups: Set<String> = []
     @AppStorage(WorkspacePresentationModeSettings.modeKey)
     private var workspacePresentationMode = WorkspacePresentationModeSettings.defaultMode.rawValue
     @AppStorage(KeyboardShortcutSettings.Action.selectWorkspaceByNumber.defaultsKey)
@@ -8724,6 +8846,74 @@ struct VerticalTabsSidebar: View {
         return shortcut
     }
 
+    @ViewBuilder
+    private func sidebarTabRow(
+        tab: Workspace,
+        tabIndexById: [UUID: Int],
+        workspaceCount: Int,
+        canCloseWorkspace: Bool,
+        workspaceNumberShortcut: StoredShortcut,
+        selectedContextTargetIds: [UUID],
+        selectedRemoteContextMenuWorkspaceIds: [UUID],
+        allSelectedRemoteContextMenuTargetsConnecting: Bool,
+        allSelectedRemoteContextMenuTargetsDisconnected: Bool,
+        tabItemSettings: SidebarTabItemSettingsSnapshot
+    ) -> some View {
+        let index = tabIndexById[tab.id] ?? 0
+        let tabIsMultiSelected = selectedTabIds.contains(tab.id)
+        let contextMenuWorkspaceIds = tabIsMultiSelected
+            ? selectedContextTargetIds
+            : [tab.id]
+        let remoteContextMenuWorkspaceIds = tabIsMultiSelected
+            ? selectedRemoteContextMenuWorkspaceIds
+            : (tab.isRemoteWorkspace ? [tab.id] : [])
+        let allRemoteContextMenuTargetsConnecting = tabIsMultiSelected
+            ? allSelectedRemoteContextMenuTargetsConnecting
+            : (tab.isRemoteWorkspace && tab.remoteConnectionState == .connecting)
+        let allRemoteContextMenuTargetsDisconnected = tabIsMultiSelected
+            ? allSelectedRemoteContextMenuTargetsDisconnected
+            : (tab.isRemoteWorkspace && tab.remoteConnectionState == .disconnected)
+        TabItemView(
+            tabManager: tabManager,
+            notificationStore: notificationStore,
+            tab: tab,
+            index: index,
+            isActive: tabManager.selectedTabId == tab.id,
+            workspaceShortcutDigit: WorkspaceShortcutMapper.digitForWorkspace(
+                at: index,
+                workspaceCount: workspaceCount
+            ),
+            workspaceShortcutModifierSymbol: workspaceNumberShortcut.modifierDisplayString,
+            canCloseWorkspace: canCloseWorkspace,
+            accessibilityWorkspaceCount: workspaceCount,
+            unreadCount: notificationStore.unreadCount(forTabId: tab.id),
+            latestNotificationText: {
+                guard showsSidebarNotificationMessage,
+                      let notification = notificationStore.latestNotification(forTabId: tab.id) else {
+                    return nil
+                }
+                let text = notification.body.isEmpty ? notification.title : notification.body
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }(),
+            rowSpacing: tabRowSpacing,
+            setSelectionToTabs: { selection = .tabs },
+            selectedTabIds: $selectedTabIds,
+            lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
+            showsModifierShortcutHints: modifierKeyMonitor.isModifierPressed,
+            dragAutoScrollController: dragAutoScrollController,
+            draggedTabId: $draggedTabId,
+            dropIndicator: $dropIndicator,
+            contextMenuWorkspaceIds: contextMenuWorkspaceIds,
+            remoteContextMenuWorkspaceIds: remoteContextMenuWorkspaceIds,
+            allRemoteContextMenuTargetsConnecting: allRemoteContextMenuTargetsConnecting,
+            allRemoteContextMenuTargetsDisconnected: allRemoteContextMenuTargetsDisconnected,
+            isMultiSelected: tabIsMultiSelected,
+            settings: tabItemSettings
+        )
+        .equatable()
+    }
+
     var body: some View {
         let tabs = tabManager.tabs
         let workspaceCount = tabs.count
@@ -8751,59 +8941,97 @@ struct VerticalTabsSidebar: View {
                             .frame(height: trafficLightPadding)
 
                         LazyVStack(spacing: tabRowSpacing) {
-                            ForEach(tabs, id: \.id) { tab in
-                                let index = tabIndexById[tab.id] ?? 0
-                                let usesSelectedContextMenuTargets = selectedTabIds.contains(tab.id)
-                                let contextMenuWorkspaceIds = usesSelectedContextMenuTargets
-                                    ? selectedContextTargetIds
-                                    : [tab.id]
-                                let remoteContextMenuWorkspaceIds = usesSelectedContextMenuTargets
-                                    ? selectedRemoteContextMenuWorkspaceIds
-                                    : (tab.isRemoteWorkspace ? [tab.id] : [])
-                                let allRemoteContextMenuTargetsConnecting = usesSelectedContextMenuTargets
-                                    ? allSelectedRemoteContextMenuTargetsConnecting
-                                    : (tab.isRemoteWorkspace && tab.remoteConnectionState == .connecting)
-                                let allRemoteContextMenuTargetsDisconnected = usesSelectedContextMenuTargets
-                                    ? allSelectedRemoteContextMenuTargetsDisconnected
-                                    : (tab.isRemoteWorkspace && tab.remoteConnectionState == .disconnected)
-                                TabItemView(
-                                    tabManager: tabManager,
-                                    notificationStore: notificationStore,
-                                    tab: tab,
-                                    index: index,
-                                    isActive: tabManager.selectedTabId == tab.id,
-                                    workspaceShortcutDigit: WorkspaceShortcutMapper.digitForWorkspace(
-                                        at: index,
-                                        workspaceCount: workspaceCount
-                                    ),
-                                    workspaceShortcutModifierSymbol: workspaceNumberShortcut.modifierDisplayString,
-                                    canCloseWorkspace: canCloseWorkspace,
-                                    accessibilityWorkspaceCount: workspaceCount,
-                                    unreadCount: notificationStore.unreadCount(forTabId: tab.id),
-                                    latestNotificationText: {
-                                        guard showsSidebarNotificationMessage,
-                                              let notification = notificationStore.latestNotification(forTabId: tab.id) else {
-                                            return nil
+                            let pinnedTabs = tabs.filter(\.isPinned)
+                            let unpinnedTabs = tabs.filter { !$0.isPinned }
+                            let grouped = groupedTabs(unpinnedTabs)
+                            let hasGroups = grouped.count > 1 || !pinnedTabs.isEmpty
+
+                            // Bookmarks section
+                            if !pinnedTabs.isEmpty {
+                                SidebarBookmarkHeader()
+                                ForEach(pinnedTabs, id: \.id) { tab in
+                                    sidebarTabRow(
+                                        tab: tab,
+                                        tabIndexById: tabIndexById,
+                                        workspaceCount: workspaceCount,
+                                        canCloseWorkspace: canCloseWorkspace,
+                                        workspaceNumberShortcut: workspaceNumberShortcut,
+                                        selectedContextTargetIds: selectedContextTargetIds,
+                                        selectedRemoteContextMenuWorkspaceIds: selectedRemoteContextMenuWorkspaceIds,
+                                        allSelectedRemoteContextMenuTargetsConnecting: allSelectedRemoteContextMenuTargetsConnecting,
+                                        allSelectedRemoteContextMenuTargetsDisconnected: allSelectedRemoteContextMenuTargetsDisconnected,
+                                        tabItemSettings: tabItemSettings
+                                    )
+                                }
+                            }
+
+                            // Folder groups
+                            ForEach(Array(grouped.enumerated()), id: \.element.id) { groupIndex, group in
+                                if hasGroups {
+                                    if groupIndex > 0 || !pinnedTabs.isEmpty {
+                                        Divider()
+                                            .padding(.horizontal, 12)
+                                            .padding(.top, 4)
+                                    }
+                                    let isCollapsed = collapsedGroups.contains(group.directory)
+                                    SidebarGroupHeader(
+                                        directory: group.directory,
+                                        tabCount: group.tabs.count,
+                                        isCollapsed: isCollapsed,
+                                        onToggle: {
+                                            withAnimation(.easeOut(duration: 0.1)) {
+                                                if collapsedGroups.contains(group.directory) {
+                                                    collapsedGroups.remove(group.directory)
+                                                } else {
+                                                    collapsedGroups.insert(group.directory)
+                                                }
+                                            }
                                         }
-                                        let text = notification.body.isEmpty ? notification.title : notification.body
-                                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        return trimmed.isEmpty ? nil : trimmed
-                                    }(),
-                                    rowSpacing: tabRowSpacing,
-                                    setSelectionToTabs: { selection = .tabs },
-                                    selectedTabIds: $selectedTabIds,
-                                    lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
-                                    showsModifierShortcutHints: modifierKeyMonitor.isModifierPressed,
-                                    dragAutoScrollController: dragAutoScrollController,
-                                    draggedTabId: $draggedTabId,
-                                    dropIndicator: $dropIndicator,
-                                    contextMenuWorkspaceIds: contextMenuWorkspaceIds,
-                                    remoteContextMenuWorkspaceIds: remoteContextMenuWorkspaceIds,
-                                    allRemoteContextMenuTargetsConnecting: allRemoteContextMenuTargetsConnecting,
-                                    allRemoteContextMenuTargetsDisconnected: allRemoteContextMenuTargetsDisconnected,
-                                    settings: tabItemSettings
-                                )
-                                .equatable()
+                                    )
+                                    .onDrop(
+                                        of: SidebarTabDragPayload.dropContentTypes,
+                                        delegate: SidebarGroupHeaderDropDelegate(
+                                            groupDirectory: group.directory,
+                                            tabManager: tabManager,
+                                            draggedTabId: $draggedTabId,
+                                            selectedTabIds: $selectedTabIds,
+                                            lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
+                                            dragAutoScrollController: dragAutoScrollController,
+                                            dropIndicator: $dropIndicator
+                                        )
+                                    )
+                                    if !isCollapsed {
+                                        ForEach(group.tabs, id: \.id) { tab in
+                                            sidebarTabRow(
+                                                tab: tab,
+                                                tabIndexById: tabIndexById,
+                                                workspaceCount: workspaceCount,
+                                                canCloseWorkspace: canCloseWorkspace,
+                                                workspaceNumberShortcut: workspaceNumberShortcut,
+                                                selectedContextTargetIds: selectedContextTargetIds,
+                                                selectedRemoteContextMenuWorkspaceIds: selectedRemoteContextMenuWorkspaceIds,
+                                                allSelectedRemoteContextMenuTargetsConnecting: allSelectedRemoteContextMenuTargetsConnecting,
+                                                allSelectedRemoteContextMenuTargetsDisconnected: allSelectedRemoteContextMenuTargetsDisconnected,
+                                                tabItemSettings: tabItemSettings
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    ForEach(group.tabs, id: \.id) { tab in
+                                        sidebarTabRow(
+                                            tab: tab,
+                                            tabIndexById: tabIndexById,
+                                            workspaceCount: workspaceCount,
+                                            canCloseWorkspace: canCloseWorkspace,
+                                            workspaceNumberShortcut: workspaceNumberShortcut,
+                                            selectedContextTargetIds: selectedContextTargetIds,
+                                            selectedRemoteContextMenuWorkspaceIds: selectedRemoteContextMenuWorkspaceIds,
+                                            allSelectedRemoteContextMenuTargetsConnecting: allSelectedRemoteContextMenuTargetsConnecting,
+                                            allSelectedRemoteContextMenuTargetsDisconnected: allSelectedRemoteContextMenuTargetsDisconnected,
+                                            tabItemSettings: tabItemSettings
+                                        )
+                                    }
+                                }
                             }
                         }
                         .padding(.vertical, 8)
@@ -8999,18 +9227,6 @@ enum ShortcutHintDebugSettings {
     static func resetVisibilityDefaults(defaults: UserDefaults = .standard) {
         defaults.set(defaultAlwaysShowHints, forKey: alwaysShowHintsKey)
         defaults.set(defaultShowHintsOnCommandHold, forKey: showHintsOnCommandHoldKey)
-    }
-}
-
-enum DevBuildBannerDebugSettings {
-    static let sidebarBannerVisibleKey = "showSidebarDevBuildBanner"
-    static let defaultShowSidebarBanner = true
-
-    static func showSidebarBanner(defaults: UserDefaults = .standard) -> Bool {
-        guard defaults.object(forKey: sidebarBannerVisibleKey) != nil else {
-            return defaultShowSidebarBanner
-        }
-        return defaults.bool(forKey: sidebarBannerVisibleKey)
     }
 }
 
@@ -9821,6 +10037,8 @@ private struct FeedbackComposerMessageEditor: NSViewRepresentable {
     let placeholder: String
     let accessibilityLabel: String
     let accessibilityIdentifier: String
+    var onBeganEditing: (() -> Void)? = nil
+    var onEndedEditing: ((String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -9857,6 +10075,18 @@ private struct FeedbackComposerMessageEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            parent.onBeganEditing?()
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else {
+                parent.onEndedEditing?(parent.text)
+                return
+            }
+            parent.onEndedEditing?(textView.string)
         }
     }
 }
@@ -10938,18 +11168,9 @@ private struct SidebarFooterIconButtonStyleBody: View {
 private struct SidebarDevFooter: View {
     @ObservedObject var updateViewModel: UpdateViewModel
     let onSendFeedback: () -> Void
-    @AppStorage(DevBuildBannerDebugSettings.sidebarBannerVisibleKey)
-    private var showSidebarDevBuildBanner = DevBuildBannerDebugSettings.defaultShowSidebarBanner
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SidebarFooterButtons(updateViewModel: updateViewModel, onSendFeedback: onSendFeedback)
-            if showSidebarDevBuildBanner {
-                Text(String(localized: "debug.devBuildBanner.title", defaultValue: "THIS IS A DEV BUILD"))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.red)
-            }
-        }
+        SidebarFooterButtons(updateViewModel: updateViewModel, onSendFeedback: onSendFeedback)
         .padding(.leading, 6)
         .padding(.trailing, 10)
         .padding(.bottom, 6)
@@ -11024,6 +11245,91 @@ private final class SidebarScrollViewResolverView: NSView {
             guard let self else { return }
             onResolve?(self.enclosingScrollView)
         }
+    }
+}
+
+// MARK: - Sidebar Tab Grouping
+
+private struct SidebarTabGroup: Identifiable {
+    var id: String { directory }
+    let directory: String
+    let tabs: [Workspace]
+}
+
+@MainActor
+private func groupedTabs(_ tabs: [Workspace]) -> [SidebarTabGroup] {
+    var groups: [String: [Workspace]] = [:]
+    var order: [String] = []
+    for tab in tabs {
+        let dir = tab.initialDirectory
+        if groups[dir] == nil {
+            order.append(dir)
+        }
+        groups[dir, default: []].append(tab)
+    }
+    return order.map { SidebarTabGroup(directory: $0, tabs: groups[$0]!) }
+}
+
+private func abbreviatedPath(_ path: String) -> String {
+    let url = URL(fileURLWithPath: path)
+    return url.lastPathComponent
+}
+
+private struct SidebarBookmarkHeader: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "bookmark.fill")
+                .font(.system(size: 10))
+                .foregroundColor(.orange)
+            Text(String(localized: "sidebar.bookmarks.header", defaultValue: "Bookmarks"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Color.primary.opacity(0.55))
+                .textCase(.uppercase)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+}
+
+private struct SidebarGroupHeader: View {
+    let directory: String
+    let tabCount: Int
+    let isCollapsed: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 5) {
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(Color.primary.opacity(0.4))
+                    .frame(width: 10)
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(Color.primary.opacity(0.4))
+                Text(abbreviatedPath(directory))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color.primary.opacity(0.55))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if isCollapsed {
+                    Text("\(tabCount)")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Color.primary.opacity(0.45))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.primary.opacity(0.08))
+                        .clipShape(Capsule())
+                }
+                Spacer()
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
     }
 }
 
@@ -11153,10 +11459,13 @@ enum SidebarWorkspaceShortcutHintMetrics {
 }
 
 enum SidebarTrailingAccessoryWidthPolicy {
+    static let memoButtonWidth: CGFloat = 16
     static let closeButtonWidth: CGFloat = 16
+    static let buttonSpacing: CGFloat = 4
 
     static func width(
-        canCloseWorkspace: Bool,
+        showsMemoButton: Bool,
+        showsCloseButton: Bool,
         showsWorkspaceShortcutHint: Bool,
         workspaceShortcutLabel: String?,
         debugXOffset: Double
@@ -11168,7 +11477,17 @@ enum SidebarTrailingAccessoryWidthPolicy {
             )
         }
 
-        return canCloseWorkspace ? closeButtonWidth : 0
+        var width: CGFloat = 0
+        if showsMemoButton {
+            width += memoButtonWidth
+        }
+        if showsCloseButton {
+            if width > 0 {
+                width += buttonSpacing
+            }
+            width += closeButtonWidth
+        }
+        return width
     }
 }
 
@@ -11191,6 +11510,7 @@ private struct TabItemView: View, Equatable {
         lhs.tab === rhs.tab &&
         lhs.index == rhs.index &&
         lhs.isActive == rhs.isActive &&
+        lhs.isMultiSelected == rhs.isMultiSelected &&
         lhs.workspaceShortcutDigit == rhs.workspaceShortcutDigit &&
         lhs.workspaceShortcutModifierSymbol == rhs.workspaceShortcutModifierSymbol &&
         lhs.canCloseWorkspace == rhs.canCloseWorkspace &&
@@ -11233,14 +11553,11 @@ private struct TabItemView: View, Equatable {
     let remoteContextMenuWorkspaceIds: [UUID]
     let allRemoteContextMenuTargetsConnecting: Bool
     let allRemoteContextMenuTargetsDisconnected: Bool
+    let isMultiSelected: Bool
     let settings: SidebarTabItemSettingsSnapshot
     @State private var workspaceObservationGeneration: UInt64 = 0
     @State private var isHovering = false
     @State private var rowHeight: CGFloat = 1
-
-    var isMultiSelected: Bool {
-        selectedTabIds.contains(tab.id)
-    }
 
     private var isBeingDragged: Bool {
         draggedTabId == tab.id
@@ -11356,8 +11673,44 @@ private struct TabItemView: View, Equatable {
         usesInvertedActiveForeground ? 1.0 : 0.9
     }
 
+    @ViewBuilder
+    private var compactStatusIcons: some View {
+        let iconColor = activeSecondaryColor(0.6)
+        let iconFont = Font.system(size: 9)
+        HStack(spacing: 3) {
+            // Progress indicator
+            if tab.progress != nil {
+                Image(systemName: "circle.dotted")
+                    .font(iconFont)
+                    .foregroundColor(activeProgressFillColor)
+            }
+            // Log level indicator
+            if let latestLog = tab.logEntries.last {
+                Image(systemName: logLevelIcon(latestLog.level))
+                    .font(.system(size: 8))
+                    .foregroundColor(logLevelColor(latestLog.level, isActive: usesInvertedActiveForeground))
+            }
+            // Remote connection indicator
+            if tab.isRemoteWorkspace {
+                Image(systemName: tab.remoteConnectionState == .connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                    .font(iconFont)
+                    .foregroundColor(tab.remoteConnectionState == .connected ? iconColor : .orange)
+            }
+            // Notification dot
+            if latestNotificationText != nil, unreadCount == 0 {
+                Circle()
+                    .fill(cmuxAccentColor())
+                    .frame(width: 5, height: 5)
+            }
+        }
+    }
+
     private var showCloseButton: Bool {
         isHovering && canCloseWorkspace && !(showsModifierShortcutHints || alwaysShowShortcutHints)
+    }
+
+    private var showMemoButton: Bool {
+        visibleMemoText != nil || (isHovering && !(showsModifierShortcutHints || alwaysShowShortcutHints))
     }
 
     private var workspaceShortcutLabel: String? {
@@ -11371,7 +11724,8 @@ private struct TabItemView: View, Equatable {
 
     private var trailingAccessoryWidth: CGFloat {
         SidebarTrailingAccessoryWidthPolicy.width(
-            canCloseWorkspace: canCloseWorkspace,
+            showsMemoButton: showMemoButton,
+            showsCloseButton: showCloseButton,
             showsWorkspaceShortcutHint: showsWorkspaceShortcutHint,
             workspaceShortcutLabel: workspaceShortcutLabel,
             debugXOffset: sidebarShortcutHintXOffset
@@ -11427,6 +11781,14 @@ private struct TabItemView: View, Equatable {
         }
     }
 
+    private var visibleMemoText: String? {
+        guard let memo = tab.memo,
+              !memo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return memo
+    }
+
     @ViewBuilder
     private var remoteWorkspaceSection: some View {
         if sidebarShowSSH, let remoteWorkspaceSidebarText {
@@ -11468,6 +11830,7 @@ private struct TabItemView: View, Equatable {
             localized: "sidebar.pinnedWorkspaceProtected.tooltip",
             defaultValue: "Pinned workspace. Closing requires confirmation."
         )
+        let openMemoTooltip = String(localized: "workspace.memo.open", defaultValue: "Open Memo")
         let closeButtonTooltip = tab.isPinned
             ? protectedWorkspaceTooltip
             : KeyboardShortcutSettings.Action.closeWorkspace.tooltip(closeWorkspaceTooltip)
@@ -11515,8 +11878,8 @@ private struct TabItemView: View, Equatable {
             return pullRequestDisplays(orderedPanelIds: orderedPanelIds)
         }()
 
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
                 if unreadCount > 0 {
                     ZStack {
                         Circle()
@@ -11542,24 +11905,51 @@ private struct TabItemView: View, Equatable {
                     .truncationMode(.tail)
                     .layoutPriority(1)
 
+                // Compact status icons
+                compactStatusIcons
+
                 Spacer(minLength: 0)
 
                 ZStack(alignment: .trailing) {
-                    Button(action: {
-                        #if DEBUG
-                        dlog("sidebar.close workspace=\(tab.id.uuidString.prefix(5)) method=button")
-                        #endif
-                        tabManager.closeWorkspaceWithConfirmation(tab)
-                    }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(activeSecondaryColor(0.7))
+                    if !showsWorkspaceShortcutHint {
+                        HStack(spacing: SidebarTrailingAccessoryWidthPolicy.buttonSpacing) {
+                            if showMemoButton {
+                                Button(action: openMemoSurface) {
+                                    Image(systemName: visibleMemoText == nil ? "note.text.badge.plus" : "note.text")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(activeSecondaryColor(0.7))
+                                }
+                                .buttonStyle(.plain)
+                                .safeHelp(openMemoTooltip)
+                                .accessibilityLabel(Text(openMemoTooltip))
+                                .frame(
+                                    width: SidebarTrailingAccessoryWidthPolicy.memoButtonWidth,
+                                    height: 16,
+                                    alignment: .center
+                                )
+                            }
+
+                            if showCloseButton {
+                                Button(action: {
+                                    #if DEBUG
+                                    dlog("sidebar.close workspace=\(tab.id.uuidString.prefix(5)) method=button")
+                                    #endif
+                                    tabManager.closeWorkspaceWithConfirmation(tab)
+                                }) {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundColor(activeSecondaryColor(0.7))
+                                }
+                                .buttonStyle(.plain)
+                                .safeHelp(closeButtonTooltip)
+                                .frame(
+                                    width: SidebarTrailingAccessoryWidthPolicy.closeButtonWidth,
+                                    height: 16,
+                                    alignment: .center
+                                )
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .safeHelp(closeButtonTooltip)
-                    .frame(width: SidebarTrailingAccessoryWidthPolicy.closeButtonWidth, height: 16, alignment: .center)
-                    .opacity(showCloseButton && !showsWorkspaceShortcutHint ? 1 : 0)
-                    .allowsHitTesting(showCloseButton && !showsWorkspaceShortcutHint)
 
                     if showsWorkspaceShortcutHint, let workspaceShortcutLabel {
                         Text(workspaceShortcutLabel)
@@ -11582,123 +11972,31 @@ private struct TabItemView: View, Equatable {
                 .frame(width: trailingAccessoryWidth, height: 16, alignment: .trailing)
             }
 
-            if let subtitle = effectiveSubtitle {
-                Text(subtitle)
-                    .font(.system(size: 10))
-                    .foregroundColor(activeSecondaryColor(0.8))
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .multilineTextAlignment(.leading)
-            }
-
-            remoteWorkspaceSection
-
-            if detailVisibility.showsMetadata {
-                let metadataEntries = tab.sidebarStatusEntriesInDisplayOrder()
-                let metadataBlocks = tab.sidebarMetadataBlocksInDisplayOrder()
-                if !metadataEntries.isEmpty {
-                    SidebarMetadataRows(
-                        entries: metadataEntries,
-                        isActive: usesInvertedActiveForeground,
-                        onFocus: { updateSelection() }
-                    )
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-                if !metadataBlocks.isEmpty {
-                    SidebarMetadataMarkdownBlocks(
-                        blocks: metadataBlocks,
-                        isActive: usesInvertedActiveForeground,
-                        onFocus: { updateSelection() }
-                    )
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            }
-
-            // Latest log entry
-            if detailVisibility.showsLog, let latestLog = tab.logEntries.last {
-                HStack(spacing: 4) {
-                    Image(systemName: logLevelIcon(latestLog.level))
-                        .font(.system(size: 8))
-                        .foregroundColor(logLevelColor(latestLog.level, isActive: usesInvertedActiveForeground))
-                    Text(latestLog.message)
-                        .font(.system(size: 10))
-                        .foregroundColor(activeSecondaryColor(0.8))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-
-            // Progress bar
-            if detailVisibility.showsProgress, let progress = tab.progress {
-                VStack(alignment: .leading, spacing: 2) {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule()
-                                .fill(activeProgressTrackColor)
-                            Capsule()
-                                .fill(activeProgressFillColor)
-                                .frame(width: max(0, geo.size.width * CGFloat(progress.value)))
-                        }
-                    }
-                    .frame(height: 3)
-
-                    if let label = progress.label {
-                        Text(label)
-                            .font(.system(size: 9))
-                            .foregroundColor(activeSecondaryColor(0.6))
-                            .lineLimit(1)
-                    }
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-
-            // Branch + directory row
+            // Branch row only
             if detailVisibility.showsBranchDirectory {
                 if sidebarBranchVerticalLayout {
                     if !branchDirectoryLines.isEmpty {
-                        HStack(alignment: .top, spacing: 3) {
+                        HStack(spacing: 3) {
                             if sidebarShowGitBranchIcon, branchLinesContainBranch {
                                 Image(systemName: "arrow.triangle.branch")
                                     .font(.system(size: 9))
                                     .foregroundColor(activeSecondaryColor(0.6))
                             }
-                            VStack(alignment: .leading, spacing: 1) {
-                                ForEach(Array(branchDirectoryLines.enumerated()), id: \.offset) { _, line in
-                                    HStack(spacing: 3) {
-                                        if let branch = line.branch {
-                                            Text(branch)
-                                                .font(.system(size: 10, design: .monospaced))
-                                                .foregroundColor(activeSecondaryColor(0.75))
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
-                                        }
-                                        if line.branch != nil, line.directory != nil {
-                                            Image(systemName: "circle.fill")
-                                                .font(.system(size: 3))
-                                                .foregroundColor(activeSecondaryColor(0.6))
-                                                .padding(.horizontal, 1)
-                                        }
-                                        if let directory = line.directory {
-                                            Text(directory)
-                                                .font(.system(size: 10, design: .monospaced))
-                                                .foregroundColor(activeSecondaryColor(0.75))
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
-                                        }
-                                    }
-                                }
-                            }
+                            Text(branchDirectoryLines.compactMap(\.branch).joined(separator: ", "))
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(activeSecondaryColor(0.75))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         }
                     }
-                } else if let dirRow = compactBranchDirectoryRow {
+                } else if let branchText = compactGitBranchSummaryText {
                     HStack(spacing: 3) {
-                        if sidebarShowGitBranchIcon, compactGitBranchSummaryText != nil {
+                        if sidebarShowGitBranchIcon {
                             Image(systemName: "arrow.triangle.branch")
                                 .font(.system(size: 9))
                                 .foregroundColor(activeSecondaryColor(0.6))
                         }
-                        Text(dirRow)
+                        Text(branchText)
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundColor(activeSecondaryColor(0.75))
                             .lineLimit(1)
@@ -11707,58 +12005,11 @@ private struct TabItemView: View, Equatable {
                 }
             }
 
-            // Pull request rows
-            if detailVisibility.showsPullRequests, !pullRequestRows.isEmpty {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(pullRequestRows) { pullRequest in
-                        Button(action: {
-                            openPullRequestLink(pullRequest.url)
-                        }) {
-                            HStack(spacing: 4) {
-                                PullRequestStatusIcon(
-                                    status: pullRequest.status,
-                                    color: pullRequestForegroundColor
-                                )
-                                Text("\(pullRequest.label) #\(pullRequest.number)")
-                                    .underline()
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                Text(pullRequestStatusLabel(pullRequest.status, checks: pullRequest.checks))
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(pullRequestForegroundColor)
-                        }
-                        .buttonStyle(.plain)
-                        .safeHelp(String(localized: "sidebar.pullRequest.openTooltip", defaultValue: "Open \(pullRequest.label) #\(pullRequest.number)"))
-                    }
-                }
-            }
-
-            // Ports row
-            if detailVisibility.showsPorts, !tab.listeningPorts.isEmpty {
-                HStack(spacing: 4) {
-                    ForEach(tab.listeningPorts, id: \.self) { port in
-                        Button(action: {
-                            openPortLink(port)
-                        }) {
-                            Text(String(localized: "sidebar.port.label", defaultValue: ":\(port)"))
-                                .underline()
-                        }
-                        .buttonStyle(.plain)
-                        .safeHelp(String(localized: "sidebar.port.openTooltip", defaultValue: "Open localhost:\(port)"))
-                    }
-                    Spacer(minLength: 0)
-                }
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(activeSecondaryColor(0.75))
-                .lineLimit(1)
-            }
         }
         .animation(.easeInOut(duration: 0.2), value: tab.logEntries.count)
         .animation(.easeInOut(duration: 0.2), value: tab.progress != nil)
         .animation(.easeInOut(duration: 0.2), value: tab.metadataBlocks.count)
+        .animation(.easeInOut(duration: 0.2), value: tab.memo ?? "")
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
@@ -11934,6 +12185,15 @@ private struct TabItemView: View, Equatable {
         if tab.hasCustomTitle {
             Button(String(localized: "contextMenu.removeCustomWorkspaceName", defaultValue: "Remove Custom Workspace Name")) {
                 tabManager.clearCustomTitle(tabId: tab.id)
+            }
+        }
+
+        if !isMulti {
+            Button(String(localized: "workspace.memo.open", defaultValue: "Open Memo")) {
+                openMemoSurface()
+            }
+            Button(String(localized: "workspace.history.open", defaultValue: "Open History")) {
+                openHistorySurface()
             }
         }
 
@@ -12203,6 +12463,20 @@ private struct TabItemView: View, Equatable {
             )
         }
         setSelectionToTabs()
+    }
+
+    private func openMemoSurface() {
+        selectedTabIds = [tab.id]
+        lastSidebarSelectionIndex = index
+        setSelectionToTabs()
+        _ = tabManager.openMemoSurface(in: tab.id)
+    }
+
+    private func openHistorySurface() {
+        selectedTabIds = [tab.id]
+        lastSidebarSelectionIndex = index
+        setSelectionToTabs()
+        _ = tabManager.openHistorySurface(in: tab.id)
     }
 
     private func closeTabs(_ targetIds: [UUID], allowPinned: Bool) {
@@ -13376,6 +13650,68 @@ private struct SidebarBonsplitTabDropDelegate: DropDelegate {
     }
 }
 
+private struct SidebarGroupHeaderDropDelegate: DropDelegate {
+    let groupDirectory: String
+    let tabManager: TabManager
+    @Binding var draggedTabId: UUID?
+    @Binding var selectedTabIds: Set<UUID>
+    @Binding var lastSidebarSelectionIndex: Int?
+    let dragAutoScrollController: SidebarDragAutoScrollController
+    @Binding var dropIndicator: SidebarDropIndicator?
+
+    func validateDrop(info: DropInfo) -> Bool {
+        let hasType = info.hasItemsConforming(to: [SidebarTabDragPayload.typeIdentifier])
+        let hasDrag = draggedTabId != nil
+        return hasType && hasDrag
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        dragAutoScrollController.updateFromDragLocation()
+        return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        defer {
+            draggedTabId = nil
+            dropIndicator = nil
+            dragAutoScrollController.stop()
+        }
+        guard let draggedTabId else { return false }
+        guard let draggedWorkspace = tabManager.tabs.first(where: { $0.id == draggedTabId }) else {
+            return false
+        }
+
+        // Find the last tab in the target group to place after it
+        let groupTabs = tabManager.tabs.filter { $0.initialDirectory == groupDirectory }
+        let targetIndex: Int
+        if let lastGroupTab = groupTabs.last,
+           let lastIndex = tabManager.tabs.firstIndex(where: { $0.id == lastGroupTab.id }) {
+            // Place after the last tab in the group
+            let draggedIndex = tabManager.tabs.firstIndex(where: { $0.id == draggedTabId }) ?? 0
+            targetIndex = draggedIndex < lastIndex ? lastIndex : lastIndex + 1
+        } else {
+            // Group has no tabs (shouldn't happen), append to end
+            targetIndex = tabManager.tabs.count
+        }
+
+        _ = tabManager.reorderWorkspace(tabId: draggedTabId, toIndex: targetIndex)
+
+        // Update group membership
+        if draggedWorkspace.initialDirectory != groupDirectory {
+            draggedWorkspace.initialDirectory = groupDirectory
+        }
+
+        if let selectedId = tabManager.selectedTabId {
+            selectedTabIds = [selectedId]
+            lastSidebarSelectionIndex = tabManager.tabs.firstIndex { $0.id == selectedId }
+        } else {
+            selectedTabIds = []
+            lastSidebarSelectionIndex = nil
+        }
+        return true
+    }
+}
+
 private struct SidebarTabDropDelegate: DropDelegate {
     let targetTabId: UUID?
     let tabManager: TabManager
@@ -13462,7 +13798,17 @@ private struct SidebarTabDropDelegate: DropDelegate {
             return false
         }
 
-        guard fromIndex != targetIndex else {
+        // Move dragged workspace to target's group if they differ
+        var groupChanged = false
+        if let targetTabId,
+           let targetWorkspace = tabManager.tabs.first(where: { $0.id == targetTabId }),
+           let draggedWorkspace = tabManager.tabs.first(where: { $0.id == draggedTabId }),
+           draggedWorkspace.initialDirectory != targetWorkspace.initialDirectory {
+            draggedWorkspace.initialDirectory = targetWorkspace.initialDirectory
+            groupChanged = true
+        }
+
+        guard fromIndex != targetIndex || groupChanged else {
 #if DEBUG
             dlog("sidebar.drop.noop from=\(fromIndex) to=\(targetIndex)")
 #endif
@@ -13471,9 +13817,15 @@ private struct SidebarTabDropDelegate: DropDelegate {
         }
 
 #if DEBUG
-        dlog("sidebar.drop.commit tab=\(draggedTabId.uuidString.prefix(5)) from=\(fromIndex) to=\(targetIndex)")
+        dlog("sidebar.drop.commit tab=\(draggedTabId.uuidString.prefix(5)) from=\(fromIndex) to=\(targetIndex) groupChanged=\(groupChanged)")
 #endif
-        _ = tabManager.reorderWorkspace(tabId: draggedTabId, toIndex: targetIndex)
+        if fromIndex != targetIndex {
+            _ = tabManager.reorderWorkspace(tabId: draggedTabId, toIndex: targetIndex)
+        } else if groupChanged {
+            // Force sidebar re-render when only group membership changed
+            tabManager.objectWillChange.send()
+        }
+
         if let selectedId = tabManager.selectedTabId {
             selectedTabIds = [selectedId]
             syncSidebarSelection(preferredSelectedTabId: selectedId)

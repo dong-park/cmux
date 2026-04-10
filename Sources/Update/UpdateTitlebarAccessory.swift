@@ -117,6 +117,7 @@ struct TitlebarControlsStyleConfig {
 
 final class TitlebarControlsViewModel: ObservableObject {
     weak var notificationsAnchorView: NSView?
+    weak var hostWindow: NSWindow?
 }
 
 extension Notification.Name {
@@ -255,6 +256,7 @@ struct TitlebarControlsView: View {
     @ObservedObject var viewModel: TitlebarControlsViewModel
     let onToggleSidebar: () -> Void
     let onToggleNotifications: () -> Void
+    let onOpenFolder: () -> Void
     let onNewTab: () -> Void
     let visibilityMode: TitlebarControlsVisibilityMode
     @AppStorage("titlebarControlsStyle") private var styleRawValue = TitlebarControlsStyle.classic.rawValue
@@ -271,6 +273,7 @@ struct TitlebarControlsView: View {
     private enum HintSlot: Int, CaseIterable {
         case toggleSidebar
         case showNotifications
+        case openFolder
         case newTab
 
         var action: KeyboardShortcutSettings.Action {
@@ -279,6 +282,8 @@ struct TitlebarControlsView: View {
                 return .toggleSidebar
             case .showNotifications:
                 return .showNotifications
+            case .openFolder:
+                return .openFolder
             case .newTab:
                 return .newTab
             }
@@ -321,6 +326,7 @@ struct TitlebarControlsView: View {
             .background(
                 WindowAccessor { window in
                     modifierKeyMonitor.setHostWindow(window)
+                    viewModel.hostWindow = window
                 }
                 .frame(width: 0, height: 0)
             )
@@ -395,6 +401,18 @@ struct TitlebarControlsView: View {
             .background(NotificationsAnchorView { viewModel.notificationsAnchorView = $0 })
             .accessibilityLabel(String(localized: "titlebar.notifications.accessibilityLabel", defaultValue: "Notifications"))
             .safeHelp(KeyboardShortcutSettings.Action.showNotifications.tooltip(String(localized: "titlebar.notifications.tooltip", defaultValue: "Show notifications")))
+
+            TitlebarControlButton(config: config, action: {
+                #if DEBUG
+                dlog("titlebar.openFolder")
+                #endif
+                onOpenFolder()
+            }) {
+                iconLabel(systemName: "folder.badge.plus", config: config)
+            }
+            .accessibilityIdentifier("titlebarControl.openFolder")
+            .accessibilityLabel(String(localized: "sidebar.addFolder.button", defaultValue: "Add Folder"))
+            .safeHelp(KeyboardShortcutSettings.Action.openFolder.tooltip(String(localized: "sidebar.addFolder.button", defaultValue: "Add Folder")))
 
             TitlebarControlButton(config: config, action: {
                 #if DEBUG
@@ -550,9 +568,19 @@ struct TitlebarControlsView: View {
 struct HiddenTitlebarSidebarControlsView: View {
     @ObservedObject var notificationStore: TerminalNotificationStore
     @StateObject private var viewModel = TitlebarControlsViewModel()
-
-    private let hostWidth: CGFloat = 124
     private let hostHeight: CGFloat = 28
+    @AppStorage("titlebarControlsStyle") private var styleRawValue = TitlebarControlsStyle.classic.rawValue
+
+    private var hostWidth: CGFloat {
+        let config = (TitlebarControlsStyle(rawValue: styleRawValue) ?? .classic).config
+        let buttonCount: CGFloat = 4
+        return 4
+            + config.groupPadding.leading
+            + config.groupPadding.trailing
+            + buttonCount * config.buttonSize
+            + (buttonCount - 1) * config.spacing
+            + 18
+    }
 
     var body: some View {
         TitlebarControlsView(
@@ -563,6 +591,12 @@ struct HiddenTitlebarSidebarControlsView: View {
                 AppDelegate.shared?.toggleNotificationsPopover(
                     animated: true,
                     anchorView: viewModel.notificationsAnchorView
+                )
+            },
+            onOpenFolder: { [viewModel] in
+                AppDelegate.shared?.showOpenFolderPanel(
+                    preferredWindow: viewModel.hostWindow,
+                    placementOverride: .end
                 )
             },
             onNewTab: { _ = AppDelegate.shared?.tabManager?.addTab() },
@@ -789,6 +823,12 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
         self.notificationStore = notificationStore
         let toggleSidebar = { _ = AppDelegate.shared?.sidebarState?.toggle() }
         let toggleNotifications: () -> Void = { _ = AppDelegate.shared?.toggleNotificationsPopover(animated: true) }
+        let openFolder: () -> Void = { [viewModel] in
+            AppDelegate.shared?.showOpenFolderPanel(
+                preferredWindow: viewModel.hostWindow,
+                placementOverride: .end
+            )
+        }
         let newTab = { _ = AppDelegate.shared?.tabManager?.addTab() }
 
         hostingView = NonDraggableHostingView(
@@ -797,6 +837,7 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
                 viewModel: viewModel,
                 onToggleSidebar: toggleSidebar,
                 onToggleNotifications: toggleNotifications,
+                onOpenFolder: openFolder,
                 onNewTab: newTab,
                 visibilityMode: .alwaysVisible
             )

@@ -283,6 +283,9 @@ extension Workspace {
             customColor: customColor,
             isPinned: isPinned,
             currentDirectory: currentDirectory,
+            initialDirectory: initialDirectory,
+            memo: memo,
+            memoUpdatedAt: memoUpdatedAt?.timeIntervalSince1970,
             focusedPanelId: focusedPanelId,
             layout: layout,
             panels: panelSnapshots,
@@ -321,6 +324,8 @@ extension Workspace {
         setCustomTitle(snapshot.customTitle)
         setCustomColor(snapshot.customColor)
         isPinned = snapshot.isPinned
+        memo = Self.normalizedMemo(snapshot.memo)
+        memoUpdatedAt = snapshot.memoUpdatedAt.map(Date.init(timeIntervalSince1970:))
 
         // Status entries and agent PIDs are ephemeral runtime state tied to running
         // processes (e.g. claude_code "Running"). Don't restore them across app
@@ -426,6 +431,7 @@ extension Workspace {
         let terminalSnapshot: SessionTerminalPanelSnapshot?
         let browserSnapshot: SessionBrowserPanelSnapshot?
         let markdownSnapshot: SessionMarkdownPanelSnapshot?
+        let memoSnapshot: SessionMemoPanelSnapshot?
         switch panel.panelType {
         case .terminal:
             guard let terminalPanel = panel as? TerminalPanel else { return nil }
@@ -449,6 +455,7 @@ extension Workspace {
             )
             browserSnapshot = nil
             markdownSnapshot = nil
+            memoSnapshot = nil
         case .browser:
             guard let browserPanel = panel as? BrowserPanel else { return nil }
             terminalSnapshot = nil
@@ -463,11 +470,25 @@ extension Workspace {
                 forwardHistoryURLStrings: historySnapshot.forwardHistoryURLStrings
             )
             markdownSnapshot = nil
+            memoSnapshot = nil
         case .markdown:
             guard let markdownPanel = panel as? MarkdownPanel else { return nil }
             terminalSnapshot = nil
             browserSnapshot = nil
             markdownSnapshot = SessionMarkdownPanelSnapshot(filePath: markdownPanel.filePath)
+            memoSnapshot = nil
+        case .memo:
+            guard panel is MemoPanel else { return nil }
+            terminalSnapshot = nil
+            browserSnapshot = nil
+            markdownSnapshot = nil
+            memoSnapshot = SessionMemoPanelSnapshot()
+        case .history:
+            guard panel is HistoryPanel else { return nil }
+            terminalSnapshot = nil
+            browserSnapshot = nil
+            markdownSnapshot = nil
+            memoSnapshot = nil
         }
 
         return SessionPanelSnapshot(
@@ -483,7 +504,8 @@ extension Workspace {
             ttyName: ttyName,
             terminal: terminalSnapshot,
             browser: browserSnapshot,
-            markdown: markdownSnapshot
+            markdown: markdownSnapshot,
+            memo: memoSnapshot
         )
     }
 
@@ -658,6 +680,18 @@ extension Workspace {
             }
             applySessionPanelMetadata(snapshot, toPanelId: markdownPanel.id)
             return markdownPanel.id
+        case .memo:
+            guard let memoPanel = openOrFocusMemoSurface(inPane: paneId, focus: false) else {
+                return nil
+            }
+            applySessionPanelMetadata(snapshot, toPanelId: memoPanel.id)
+            return memoPanel.id
+        case .history:
+            guard let historyPanel = openOrFocusHistorySurface(inPane: paneId, focus: false) else {
+                return nil
+            }
+            applySessionPanelMetadata(snapshot, toPanelId: historyPanel.id)
+            return historyPanel.id
         }
     }
 
@@ -5467,6 +5501,7 @@ final class Workspace: Identifiable, ObservableObject {
     @Published var isPinned: Bool = false
     @Published var customColor: String?  // hex string, e.g. "#C0392B"
     @Published var currentDirectory: String
+    @Published var initialDirectory: String
     private(set) var preferredBrowserProfileID: UUID?
 
     /// Ordinal for CMUX_PORT range assignment (monotonically increasing per app session)
@@ -5544,6 +5579,8 @@ final class Workspace: Identifiable, ObservableObject {
     nonisolated private static let manualUnreadClearDelayAfterFocusFlash: TimeInterval = 0.2
     @Published var statusEntries: [String: SidebarStatusEntry] = [:]
     @Published var metadataBlocks: [String: SidebarMetadataBlock] = [:]
+    @Published var memo: String?
+    @Published var memoUpdatedAt: Date?
     @Published var logEntries: [SidebarLogEntry] = []
     @Published var progress: SidebarProgressState?
     @Published var gitBranch: SidebarGitBranchState?
@@ -5607,6 +5644,7 @@ final class Workspace: Identifiable, ObservableObject {
             sidebarObservationSignal($isPinned),
             sidebarObservationSignal($customColor),
             sidebarObservationSignal($currentDirectory),
+            sidebarObservationSignal($initialDirectory),
             $panels
                 .map(SidebarPanelObservationState.init)
                 .dropFirst()
@@ -5616,6 +5654,8 @@ final class Workspace: Identifiable, ObservableObject {
             sidebarObservationSignal($panelDirectories),
             sidebarObservationSignal($statusEntries),
             sidebarObservationSignal($metadataBlocks),
+            sidebarObservationSignal($memo),
+            sidebarObservationSignal($memoUpdatedAt),
             sidebarObservationSignal($logEntries),
             sidebarObservationSignal($progress),
             sidebarObservationSignal($gitBranch),
@@ -5677,6 +5717,8 @@ final class Workspace: Identifiable, ObservableObject {
         static let terminal = "terminal"
         static let browser = "browser"
         static let markdown = "markdown"
+        static let memo = "memo"
+        static let history = "history"
     }
 
     enum PanelShellActivityState: String {
@@ -5795,12 +5837,16 @@ final class Workspace: Identifiable, ObservableObject {
         self.processTitle = title
         self.title = title
         self.customTitle = nil
+        self.memo = nil
+        self.memoUpdatedAt = nil
 
         let trimmedWorkingDirectory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let hasWorkingDirectory = !trimmedWorkingDirectory.isEmpty
-        self.currentDirectory = hasWorkingDirectory
+        let resolvedDirectory = hasWorkingDirectory
             ? trimmedWorkingDirectory
             : FileManager.default.homeDirectoryForCurrentUser.path
+        self.currentDirectory = resolvedDirectory
+        self.initialDirectory = resolvedDirectory
 
         // Configure bonsplit with keepAllAlive to preserve terminal state
         // and keep split entry instantaneous.
@@ -6140,6 +6186,30 @@ final class Workspace: Identifiable, ObservableObject {
         panelSubscriptions[markdownPanel.id] = subscription
     }
 
+    private func installMemoPanelSubscription(_ memoPanel: MemoPanel) {
+        let subscription = memoPanel.$displayTitle
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak memoPanel] newTitle in
+                guard let self,
+                      let memoPanel,
+                      let tabId = self.surfaceIdFromPanelId(memoPanel.id) else { return }
+                guard let existing = self.bonsplitController.tab(tabId) else { return }
+
+                if self.panelTitles[memoPanel.id] != newTitle {
+                    self.panelTitles[memoPanel.id] = newTitle
+                }
+                let resolvedTitle = self.resolvedPanelTitle(panelId: memoPanel.id, fallback: newTitle)
+                guard existing.title != resolvedTitle else { return }
+                self.bonsplitController.updateTab(
+                    tabId,
+                    title: resolvedTitle,
+                    hasCustomTitle: self.panelCustomTitles[memoPanel.id] != nil
+                )
+            }
+        panelSubscriptions[memoPanel.id] = subscription
+    }
+
     private func browserRemoteWorkspaceStatusSnapshot() -> BrowserRemoteWorkspaceStatus? {
         guard let target = remoteDisplayTarget else { return nil }
         return BrowserRemoteWorkspaceStatus(
@@ -6177,6 +6247,14 @@ final class Workspace: Identifiable, ObservableObject {
         panels[panelId] as? MarkdownPanel
     }
 
+    func memoPanel(for panelId: UUID) -> MemoPanel? {
+        panels[panelId] as? MemoPanel
+    }
+
+    func existingMemoPanel() -> MemoPanel? {
+        panels.values.compactMap { $0 as? MemoPanel }.first
+    }
+
     private func surfaceKind(for panel: any Panel) -> String {
         switch panel.panelType {
         case .terminal:
@@ -6185,7 +6263,69 @@ final class Workspace: Identifiable, ObservableObject {
             return SurfaceKind.browser
         case .markdown:
             return SurfaceKind.markdown
+        case .memo:
+            return SurfaceKind.memo
+        case .history:
+            return SurfaceKind.history
         }
+    }
+
+    func existingHistoryPanel() -> HistoryPanel? {
+        panels.values.compactMap { $0 as? HistoryPanel }.first
+    }
+
+    @discardableResult
+    func openOrFocusHistorySurface(
+        inPane paneId: PaneID? = nil,
+        focus: Bool = true
+    ) -> HistoryPanel? {
+        if let existing = existingHistoryPanel() {
+            if focus {
+                existing.reload()
+                focusPanel(existing.id)
+            }
+            return existing
+        }
+
+        let targetPaneId = paneId ?? bonsplitController.focusedPaneId ?? bonsplitController.allPaneIds.first
+        guard let targetPaneId else { return nil }
+
+        let previousFocusedPanelId = focusedPanelId
+        let previousHostedView = focusedTerminalPanel?.hostedView
+
+        let historyPanel = HistoryPanel()
+        panels[historyPanel.id] = historyPanel
+        panelTitles[historyPanel.id] = historyPanel.displayTitle
+
+        guard let newTabId = bonsplitController.createTab(
+            title: historyPanel.displayTitle,
+            icon: historyPanel.displayIcon,
+            kind: SurfaceKind.history,
+            isDirty: false,
+            isLoading: false,
+            isPinned: false,
+            inPane: targetPaneId
+        ) else {
+            panels.removeValue(forKey: historyPanel.id)
+            panelTitles.removeValue(forKey: historyPanel.id)
+            return nil
+        }
+
+        surfaceIdToPanelId[newTabId] = historyPanel.id
+        if focus {
+            bonsplitController.focusPane(targetPaneId)
+            bonsplitController.selectTab(newTabId)
+            historyPanel.focus()
+            applyTabSelection(tabId: newTabId, inPane: targetPaneId)
+        } else {
+            preserveFocusAfterNonFocusSplit(
+                preferredPanelId: previousFocusedPanelId,
+                splitPanelId: historyPanel.id,
+                previousHostedView: previousHostedView
+            )
+        }
+
+        return historyPanel
     }
 
     private func resolvedPanelTitle(panelId: UUID, fallback: String) -> String {
@@ -6445,9 +6585,42 @@ final class Workspace: Identifiable, ObservableObject {
         }
     }
 
+    private static func normalizedMemo(_ memo: String?) -> String? {
+        guard let memo else { return nil }
+        return memo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : memo
+    }
+
+    func setMemo(_ rawMemo: String) {
+        guard let normalized = Self.normalizedMemo(rawMemo) else { return }
+        memo = normalized
+        memoUpdatedAt = Date()
+    }
+
+    func appendMemo(_ rawMemo: String) {
+        guard let appended = Self.normalizedMemo(rawMemo) else { return }
+        if let existing = memo, !existing.isEmpty {
+            if existing.hasSuffix("\n") || appended.hasPrefix("\n") {
+                memo = existing + appended
+            } else {
+                memo = existing + "\n" + appended
+            }
+        } else {
+            memo = appended
+        }
+        memoUpdatedAt = Date()
+    }
+
+    func clearMemo() {
+        memo = nil
+        memoUpdatedAt = nil
+    }
+
     func setCustomTitle(_ title: String?) {
         let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
+            // Once a custom title is set, it cannot be cleared by passing nil/empty.
+            // The user must explicitly set a new non-empty title to change it.
+            guard customTitle == nil else { return }
             customTitle = nil
             self.title = processTitle
         } else {
@@ -7994,6 +8167,60 @@ final class Workspace: Identifiable, ObservableObject {
         return markdownPanel
     }
 
+    @discardableResult
+    func openOrFocusMemoSurface(
+        inPane paneId: PaneID? = nil,
+        focus: Bool = true
+    ) -> MemoPanel? {
+        if let existing = existingMemoPanel() {
+            if focus {
+                focusPanel(existing.id)
+            }
+            return existing
+        }
+
+        let targetPaneId = paneId ?? bonsplitController.focusedPaneId ?? bonsplitController.allPaneIds.first
+        guard let targetPaneId else { return nil }
+
+        let previousFocusedPanelId = focusedPanelId
+        let previousHostedView = focusedTerminalPanel?.hostedView
+
+        let memoPanel = MemoPanel(workspace: self)
+        panels[memoPanel.id] = memoPanel
+        panelTitles[memoPanel.id] = memoPanel.displayTitle
+
+        guard let newTabId = bonsplitController.createTab(
+            title: memoPanel.displayTitle,
+            icon: memoPanel.displayIcon,
+            kind: SurfaceKind.memo,
+            isDirty: memoPanel.isDirty,
+            isLoading: false,
+            isPinned: false,
+            inPane: targetPaneId
+        ) else {
+            panels.removeValue(forKey: memoPanel.id)
+            panelTitles.removeValue(forKey: memoPanel.id)
+            return nil
+        }
+
+        surfaceIdToPanelId[newTabId] = memoPanel.id
+        if focus {
+            bonsplitController.focusPane(targetPaneId)
+            bonsplitController.selectTab(newTabId)
+            memoPanel.focus()
+            applyTabSelection(tabId: newTabId, inPane: targetPaneId)
+        } else {
+            preserveFocusAfterNonFocusSplit(
+                preferredPanelId: previousFocusedPanelId,
+                splitPanelId: memoPanel.id,
+                previousHostedView: previousHostedView
+            )
+        }
+
+        installMemoPanelSubscription(memoPanel)
+        return memoPanel
+    }
+
     /// Tear down all panels in this workspace, freeing their Ghostty surfaces.
     /// Called before the workspace is removed from TabManager to ensure child
     /// processes receive SIGHUP even if ARC deallocation is delayed.
@@ -8484,6 +8711,9 @@ final class Workspace: Identifiable, ObservableObject {
                 remoteStatus: browserRemoteWorkspaceStatusSnapshot()
             )
             installBrowserPanelSubscription(browserPanel)
+        } else if let memoPanel = detached.panel as? MemoPanel {
+            memoPanel.updateWorkspace(self)
+            installMemoPanelSubscription(memoPanel)
         }
 
         if let directory = detached.directory {

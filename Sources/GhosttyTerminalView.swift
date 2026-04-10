@@ -7314,6 +7314,8 @@ final class GhosttySurfaceScrollView: NSView {
     private let flashOverlayView: GhosttyFlashOverlayView
     private let flashLayer: CAShapeLayer
     private var lastFlashStyle: FlashStyle = .navigation
+    private let paneNumberBadgeContainerView: GhosttyFlashOverlayView
+    private let paneNumberBadgeLabel: NSTextField
     private let keyboardCopyModeBadgeContainerView: GhosttyFlashOverlayView
     private let keyboardCopyModeBadgeView: GhosttyPassthroughVisualEffectView
     private let keyboardCopyModeBadgeIconView: NSImageView
@@ -7514,6 +7516,8 @@ final class GhosttySurfaceScrollView: NSView {
         notificationRingLayer = CAShapeLayer()
         flashOverlayView = GhosttyFlashOverlayView(frame: .zero)
         flashLayer = CAShapeLayer()
+        paneNumberBadgeContainerView = GhosttyFlashOverlayView(frame: .zero)
+        paneNumberBadgeLabel = NSTextField(labelWithString: "")
         keyboardCopyModeBadgeContainerView = GhosttyFlashOverlayView(frame: .zero)
         keyboardCopyModeBadgeView = GhosttyPassthroughVisualEffectView(frame: .zero)
         keyboardCopyModeBadgeIconView = NSImageView(frame: .zero)
@@ -7592,6 +7596,26 @@ final class GhosttySurfaceScrollView: NSView {
         flashLayer.opacity = 0
         flashOverlayView.layer?.addSublayer(flashLayer)
         addSubview(flashOverlayView)
+        paneNumberBadgeContainerView.translatesAutoresizingMaskIntoConstraints = false
+        paneNumberBadgeContainerView.wantsLayer = true
+        paneNumberBadgeContainerView.layer?.cornerRadius = 4
+        paneNumberBadgeContainerView.layer?.masksToBounds = true
+        paneNumberBadgeContainerView.layer?.borderWidth = 1
+        paneNumberBadgeContainerView.isHidden = true
+        paneNumberBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        paneNumberBadgeLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        paneNumberBadgeLabel.lineBreakMode = .byClipping
+        paneNumberBadgeLabel.maximumNumberOfLines = 1
+        paneNumberBadgeContainerView.addSubview(paneNumberBadgeLabel)
+        addSubview(paneNumberBadgeContainerView)
+        NSLayoutConstraint.activate([
+            paneNumberBadgeContainerView.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            paneNumberBadgeContainerView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            paneNumberBadgeLabel.leadingAnchor.constraint(equalTo: paneNumberBadgeContainerView.leadingAnchor, constant: 6),
+            paneNumberBadgeLabel.trailingAnchor.constraint(equalTo: paneNumberBadgeContainerView.trailingAnchor, constant: -6),
+            paneNumberBadgeLabel.topAnchor.constraint(equalTo: paneNumberBadgeContainerView.topAnchor, constant: 2),
+            paneNumberBadgeLabel.bottomAnchor.constraint(equalTo: paneNumberBadgeContainerView.bottomAnchor, constant: -2),
+        ])
         keyboardCopyModeBadgeContainerView.translatesAutoresizingMaskIntoConstraints = false
         keyboardCopyModeBadgeContainerView.wantsLayer = true
         keyboardCopyModeBadgeContainerView.layer?.masksToBounds = false
@@ -8146,6 +8170,27 @@ final class GhosttySurfaceScrollView: NSView {
         notificationRingOverlayView.isHidden = targetHidden
         notificationRingLayer.opacity = targetOpacity
         CATransaction.commit()
+    }
+
+    func setPaneNumberBadge(text: String, isFocused: Bool, visible: Bool) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.setPaneNumberBadge(text: text, isFocused: isFocused, visible: visible)
+            }
+            return
+        }
+
+        paneNumberBadgeLabel.stringValue = text
+        paneNumberBadgeLabel.textColor = NSColor.white.withAlphaComponent(isFocused ? 0.95 : 0.85)
+        paneNumberBadgeContainerView.layer?.backgroundColor = (
+            isFocused
+            ? cmuxAccentNSColor().withAlphaComponent(0.92)
+            : NSColor.black.withAlphaComponent(0.5)
+        ).cgColor
+        paneNumberBadgeContainerView.layer?.borderColor = NSColor.white
+            .withAlphaComponent(isFocused ? 0.18 : 0.08)
+            .cgColor
+        paneNumberBadgeContainerView.isHidden = !visible
     }
 
     private func cancelDeferredSearchOverlayMutation() {
@@ -10387,6 +10432,9 @@ struct GhosttyTerminalView: NSViewRepresentable {
     var showsUnreadNotificationRing: Bool = false
     var inactiveOverlayColor: NSColor = .clear
     var inactiveOverlayOpacity: Double = 0
+    var paneNumberBadgeText: String = ""
+    var showsPaneNumberBadge: Bool = false
+    var paneNumberBadgeIsFocused: Bool = false
     var searchState: TerminalSurface.SearchState? = nil
     var reattachToken: UInt64 = 0
     var onFocus: ((UUID) -> Void)? = nil
@@ -10468,6 +10516,9 @@ struct GhosttyTerminalView: NSViewRepresentable {
         var desiredIsActive: Bool = true
         var desiredIsVisibleInUI: Bool = true
         var desiredShowsUnreadNotificationRing: Bool = false
+        var desiredPaneNumberBadgeText: String = ""
+        var desiredShowsPaneNumberBadge: Bool = false
+        var desiredPaneNumberBadgeIsFocused: Bool = false
         var desiredPortalZPriority: Int = 0
         var lastBoundHostId: ObjectIdentifier?
         var lastPaneDropZone: DropZone?
@@ -10544,6 +10595,9 @@ struct GhosttyTerminalView: NSViewRepresentable {
         coordinator.desiredIsActive = isActive
         coordinator.desiredIsVisibleInUI = isVisibleInUI
         coordinator.desiredShowsUnreadNotificationRing = showsUnreadNotificationRing
+        coordinator.desiredPaneNumberBadgeText = paneNumberBadgeText
+        coordinator.desiredShowsPaneNumberBadge = showsPaneNumberBadge
+        coordinator.desiredPaneNumberBadgeIsFocused = paneNumberBadgeIsFocused
         coordinator.desiredPortalZPriority = portalZPriority
         coordinator.hostedView = hostedView
 #if DEBUG
@@ -10591,6 +10645,11 @@ struct GhosttyTerminalView: NSViewRepresentable {
                 visible: showsInactiveOverlay
             )
             hostedView.setNotificationRing(visible: showsUnreadNotificationRing)
+            hostedView.setPaneNumberBadge(
+                text: paneNumberBadgeText,
+                isFocused: paneNumberBadgeIsFocused,
+                visible: showsPaneNumberBadge
+            )
             hostedView.setSearchOverlay(searchState: searchState)
             hostedView.syncKeyStateIndicator(text: terminalSurface.currentKeyStateIndicatorText)
         }
@@ -10656,6 +10715,11 @@ struct GhosttyTerminalView: NSViewRepresentable {
                 hostedView.setVisibleInUI(coordinator.desiredIsVisibleInUI)
                 hostedView.setActive(coordinator.desiredIsActive)
                 hostedView.setNotificationRing(visible: coordinator.desiredShowsUnreadNotificationRing)
+                hostedView.setPaneNumberBadge(
+                    text: coordinator.desiredPaneNumberBadgeText,
+                    isFocused: coordinator.desiredPaneNumberBadgeIsFocused,
+                    visible: coordinator.desiredShowsPaneNumberBadge
+                )
             }
             host.onGeometryChanged = { [weak host, weak hostedView, weak coordinator] in
                 guard let host, let hostedView, let coordinator else { return }
@@ -10692,6 +10756,11 @@ struct GhosttyTerminalView: NSViewRepresentable {
                     hostedView.setVisibleInUI(coordinator.desiredIsVisibleInUI)
                     hostedView.setActive(coordinator.desiredIsActive)
                     hostedView.setNotificationRing(visible: coordinator.desiredShowsUnreadNotificationRing)
+                    hostedView.setPaneNumberBadge(
+                        text: coordinator.desiredPaneNumberBadgeText,
+                        isFocused: coordinator.desiredPaneNumberBadgeIsFocused,
+                        visible: coordinator.desiredShowsPaneNumberBadge
+                    )
                 }
                 Self.synchronizePortalGeometry(
                     for: host,
@@ -10792,6 +10861,9 @@ struct GhosttyTerminalView: NSViewRepresentable {
         coordinator.desiredIsActive = false
         coordinator.desiredIsVisibleInUI = false
         coordinator.desiredShowsUnreadNotificationRing = false
+        coordinator.desiredPaneNumberBadgeText = ""
+        coordinator.desiredShowsPaneNumberBadge = false
+        coordinator.desiredPaneNumberBadgeIsFocused = false
         coordinator.desiredPortalZPriority = 0
         coordinator.lastBoundHostId = nil
         let hostedView = coordinator.hostedView
