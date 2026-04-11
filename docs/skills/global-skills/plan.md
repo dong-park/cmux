@@ -25,6 +25,11 @@ CMUX="$(command -v cmux-dev || command -v cmux)"
 "$CMUX" set-status phase "PLAN" --icon "🗺️" --color "#8B5CF6"
 "$CMUX" set-progress 0.0 --label "Plan: 시작"
 
+# 기존 도메인 지식 로드 — 과거 삽질을 피하기 위해 반드시 읽기
+"$CMUX" folder-memo get   # 이 프로젝트의 축적된 교훈
+"$CMUX" global-memo get   # 범용 교훈
+# → 태스크 분해 시 교훈에서 언급된 제약/주의사항을 반영
+
 # 레이아웃: 코드 탐색용 pane 추가
 "$CMUX" new-pane --type terminal --direction right
 
