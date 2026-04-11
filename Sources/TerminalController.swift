@@ -2071,6 +2071,22 @@ class TerminalController {
             return v2Result(id: id, self.v2WorkspaceMemoAppend(params: params))
         case "workspace.memo.clear":
             return v2Result(id: id, self.v2WorkspaceMemoClear(params: params))
+        case "global_memo.get":
+            return v2Result(id: id, self.v2GlobalMemoGet(params: params))
+        case "global_memo.set":
+            return v2Result(id: id, self.v2GlobalMemoSet(params: params))
+        case "global_memo.append":
+            return v2Result(id: id, self.v2GlobalMemoAppend(params: params))
+        case "global_memo.clear":
+            return v2Result(id: id, self.v2GlobalMemoClear(params: params))
+        case "folder_memo.get":
+            return v2Result(id: id, self.v2FolderMemoGet(params: params))
+        case "folder_memo.set":
+            return v2Result(id: id, self.v2FolderMemoSet(params: params))
+        case "folder_memo.append":
+            return v2Result(id: id, self.v2FolderMemoAppend(params: params))
+        case "folder_memo.clear":
+            return v2Result(id: id, self.v2FolderMemoClear(params: params))
         case "history.add":
             return v2Result(id: id, self.v2HistoryAdd(params: params))
         case "history.list":
@@ -2463,6 +2479,14 @@ class TerminalController {
             "workspace.memo.set",
             "workspace.memo.append",
             "workspace.memo.clear",
+            "global_memo.get",
+            "global_memo.set",
+            "global_memo.append",
+            "global_memo.clear",
+            "folder_memo.get",
+            "folder_memo.set",
+            "folder_memo.append",
+            "folder_memo.clear",
             "history.add",
             "history.list",
             "history.summary",
@@ -3756,6 +3780,107 @@ class TerminalController {
             "workspace_id": target.workspace.id.uuidString,
             "workspace_ref": v2Ref(kind: .workspace, uuid: target.workspace.id)
         ])
+    }
+
+    // MARK: - Global Memo
+
+    private static let globalMemoDefaultsKey = "cmux.globalMemo"
+    private static let folderMemosDefaultsKey = "cmux.folderMemos"
+
+    private func v2GlobalMemoGet(params: [String: Any]) -> V2CallResult {
+        let memo = UserDefaults.standard.string(forKey: Self.globalMemoDefaultsKey)
+        return .ok([
+            "memo": v2OrNull(memo)
+        ])
+    }
+
+    private func v2GlobalMemoSet(params: [String: Any]) -> V2CallResult {
+        guard let rawMemo = v2RawString(params, "memo"),
+              !rawMemo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .err(code: "invalid_params", message: "Missing or invalid memo", data: nil)
+        }
+        UserDefaults.standard.set(rawMemo, forKey: Self.globalMemoDefaultsKey)
+        return .ok(["memo": rawMemo])
+    }
+
+    private func v2GlobalMemoAppend(params: [String: Any]) -> V2CallResult {
+        guard let rawMemo = v2RawString(params, "memo"),
+              !rawMemo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .err(code: "invalid_params", message: "Missing or invalid memo", data: nil)
+        }
+        let existing = UserDefaults.standard.string(forKey: Self.globalMemoDefaultsKey) ?? ""
+        let combined = existing.isEmpty ? rawMemo : existing + "\n" + rawMemo
+        UserDefaults.standard.set(combined, forKey: Self.globalMemoDefaultsKey)
+        return .ok(["memo": combined])
+    }
+
+    private func v2GlobalMemoClear(params: [String: Any]) -> V2CallResult {
+        UserDefaults.standard.removeObject(forKey: Self.globalMemoDefaultsKey)
+        return .ok([:])
+    }
+
+    // MARK: - Folder Memo
+
+    private func v2FolderMemos() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: Self.folderMemosDefaultsKey) as? [String: String] ?? [:]
+    }
+
+    private func v2SaveFolderMemos(_ memos: [String: String]) {
+        UserDefaults.standard.set(memos, forKey: Self.folderMemosDefaultsKey)
+    }
+
+    private func v2FolderMemoGet(params: [String: Any]) -> V2CallResult {
+        guard let directory = v2RawString(params, "directory"),
+              !directory.isEmpty else {
+            return .err(code: "invalid_params", message: "Missing required 'directory'", data: nil)
+        }
+        let memos = v2FolderMemos()
+        return .ok([
+            "directory": directory,
+            "memo": v2OrNull(memos[directory])
+        ])
+    }
+
+    private func v2FolderMemoSet(params: [String: Any]) -> V2CallResult {
+        guard let directory = v2RawString(params, "directory"),
+              !directory.isEmpty else {
+            return .err(code: "invalid_params", message: "Missing required 'directory'", data: nil)
+        }
+        guard let rawMemo = v2RawString(params, "memo"),
+              !rawMemo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .err(code: "invalid_params", message: "Missing or invalid memo", data: nil)
+        }
+        var memos = v2FolderMemos()
+        memos[directory] = rawMemo
+        v2SaveFolderMemos(memos)
+        return .ok(["directory": directory, "memo": rawMemo])
+    }
+
+    private func v2FolderMemoAppend(params: [String: Any]) -> V2CallResult {
+        guard let directory = v2RawString(params, "directory"),
+              !directory.isEmpty else {
+            return .err(code: "invalid_params", message: "Missing required 'directory'", data: nil)
+        }
+        guard let rawMemo = v2RawString(params, "memo"),
+              !rawMemo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .err(code: "invalid_params", message: "Missing or invalid memo", data: nil)
+        }
+        var memos = v2FolderMemos()
+        let existing = memos[directory] ?? ""
+        memos[directory] = existing.isEmpty ? rawMemo : existing + "\n" + rawMemo
+        v2SaveFolderMemos(memos)
+        return .ok(["directory": directory, "memo": memos[directory]!])
+    }
+
+    private func v2FolderMemoClear(params: [String: Any]) -> V2CallResult {
+        guard let directory = v2RawString(params, "directory"),
+              !directory.isEmpty else {
+            return .err(code: "invalid_params", message: "Missing required 'directory'", data: nil)
+        }
+        var memos = v2FolderMemos()
+        memos.removeValue(forKey: directory)
+        v2SaveFolderMemos(memos)
+        return .ok(["directory": directory])
     }
 
     // MARK: - Global History

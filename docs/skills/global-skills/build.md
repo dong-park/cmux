@@ -25,6 +25,11 @@ CMUX="$(command -v cmux-dev || command -v cmux)"
 "$CMUX" set-status phase "BUILD" --icon "🔨" --color "#F59E0B"
 "$CMUX" set-progress 0.0 --label "Build: 시작"
 
+# 기존 도메인 지식 로드 — 구현 전에 과거 삽질 확인
+"$CMUX" folder-memo get   # 이 프로젝트의 교훈 (특정 파일/구조 주의사항)
+"$CMUX" global-memo get   # 범용 교훈 (기술 스택 패턴)
+# → 구현 시 교훈에 언급된 pitfall을 회피
+
 # 진행: task 완료마다 progress 갱신
 "$CMUX" workspace-memo append "- [x] Task 1 ✅ (commit: [hash])"
 "$CMUX" set-progress [n/total] --label "Build: Task [n]/[total]"
@@ -95,6 +100,26 @@ Task의 수용 기준을 검증하는 테스트를 작성하고 실행합니다.
 ```bash
 "$CMUX" workspace-memo append "⚠️ BUILD → SPEC 되돌림: [사유]"
 ```
+
+### 삽질/되돌림 발생 시 즉시 교훈 기록
+
+되돌림이나 예상치 못한 삽질이 발생하면 **해결 직후** 바로 메모에 기록합니다.
+나중에 모아서 하면 디테일이 날아갑니다.
+
+```bash
+CMUX="$(command -v cmux-dev || command -v cmux)"
+
+# 이 프로젝트에 특화된 교훈 (코드베이스 구조, 특정 파일 규칙 등)
+"$CMUX" folder-memo append "- [날짜] BUILD 교훈: [무엇을 시도했고, 왜 안 됐고, 어떻게 해결했는지]"
+
+# 프로젝트 무관한 범용 교훈 (기술 스택, 프레임워크, 설계 패턴 등)
+"$CMUX" global-memo append "- [날짜] BUILD 교훈: [다른 프로젝트에서도 적용 가능한 교훈]"
+```
+
+**기록해야 할 것:**
+- 시도한 접근법이 왜 실패했는지 (원인)
+- 최종 해결책이 무엇이었는지 (결과)
+- 다음에 같은 상황에서 어떻게 해야 하는지 (지침)
 
 ## Gate
 

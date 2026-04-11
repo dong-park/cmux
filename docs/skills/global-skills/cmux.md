@@ -57,16 +57,45 @@ CMUX="$(command -v cmux-dev || command -v cmux)"
   `read-screen`, `send`, `send-key`
 - Browser:
   `new-pane --type browser`, `new-surface --type browser`
-- Memo:
+- Workspace Memo:
   `workspace-memo get`, `workspace-memo set`, `workspace-memo append`, `workspace-memo clear`
+- Global Memo (앱 전역):
+  `global-memo get`, `global-memo set`, `global-memo append`, `global-memo clear`
+- Folder Memo (프로젝트/폴더별):
+  `folder-memo get`, `folder-memo set`, `folder-memo append`, `folder-memo clear`
 - History (전역, ~/Documents/cmux/history.json):
   `history add`, `history list`, `history summary`, `history clear`, `history open`
 
 ## Memo notes
 
+### Workspace Memo
 - `workspace-memo set` replaces the memo.
 - `workspace-memo append` appends to the existing memo and inserts one newline if needed.
 - There is currently no CLI command that opens the memo surface UI.
+
+### Global Memo
+- `global-memo get/set/append/clear` — 모든 workspace에서 공유되는 전역 메모.
+- UI: 사이드바 하단 푸터의 메모 아이콘 버튼 → 팝오버로 편집.
+- 저장: UserDefaults (`cmux.globalMemo`).
+
+### Folder Memo
+- `folder-memo get/set/append/clear [--directory <path>]` — 프로젝트(폴더) 단위 메모.
+- `--directory` 생략 시 현재 작업 디렉토리(cwd)를 기본값으로 사용.
+- UI: 사이드바 폴더 그룹 헤더의 메모 아이콘으로 존재 여부 확인.
+- 저장: UserDefaults (`cmux.folderMemos` dictionary, key=directory path).
+
+### 메모 계층 활용 지침 (도메인 지식 플라이휠)
+
+삽질/되돌림/교훈을 적절한 레벨에 축적하여 반복을 방지합니다:
+
+| 교훈 범위 | 저장 위치 | 시점 |
+|-----------|-----------|------|
+| 이 코드베이스 특화 (파일 구조, 규칙, pitfall) | `folder-memo` | build 삽질 직후, feedback 분류 후 |
+| 프로젝트 무관 범용 (기술 스택, 설계 패턴) | `global-memo` | build 삽질 직후, feedback 분류 후 |
+| 현재 작업 진행 상황 | `workspace-memo` | 각 phase 완료마다 |
+
+**읽는 시점:** dev-flow 초기화, plan 시작, build 시작 시 반드시 `folder-memo get` + `global-memo get` 실행.
+**쓰는 시점:** 삽질 발생 직후 (나중에 모아서 하면 디테일 날아감), ship 완료 후, feedback 분류 후.
 
 ## History notes
 

@@ -2024,6 +2024,22 @@ struct CMUXCLI {
                 windowOverride: windowId
             )
 
+        case "global-memo":
+            try runGlobalMemo(
+                commandArgs: commandArgs,
+                client: client,
+                jsonOutput: jsonOutput,
+                idFormat: idFormat
+            )
+
+        case "folder-memo":
+            try runFolderMemo(
+                commandArgs: commandArgs,
+                client: client,
+                jsonOutput: jsonOutput,
+                idFormat: idFormat
+            )
+
         case "history":
             try runHistory(
                 commandArgs: commandArgs,
@@ -6747,6 +6763,47 @@ struct CMUXCLI {
               cmux workspace-memo set --workspace workspace:2 --file ./notes.md
               cmux workspace-memo clear
             """
+        case "global-memo":
+            return """
+            Usage: cmux global-memo <get|set|append|clear>
+
+            Read or write a global memo shared across all workspaces.
+
+            Subcommands:
+              get                          Print the current global memo
+              set [--file <path>] <text>   Set the global memo from text or a file
+              append [--file <path>] <text>
+                                           Append text or a file to the global memo
+              clear                        Remove the global memo
+
+            Example:
+              cmux global-memo get
+              cmux global-memo set "## Global Notes"
+              cmux global-memo append "- New item"
+              cmux global-memo clear
+            """
+        case "folder-memo":
+            return """
+            Usage: cmux folder-memo <get|set|append|clear> --directory <path>
+
+            Read or write a memo for a project folder (directory).
+
+            Subcommands:
+              get                          Print the folder memo
+              set [--file <path>] <text>   Set the folder memo from text or a file
+              append [--file <path>] <text>
+                                           Append text or a file to the folder memo
+              clear                        Remove the folder memo
+
+            Flags:
+              --directory <path>           Folder path (default: current working directory)
+
+            Example:
+              cmux folder-memo get
+              cmux folder-memo set "## Project Notes"
+              cmux folder-memo get --directory /Users/me/project
+              cmux folder-memo clear --directory /Users/me/project
+            """
         case "history":
             return """
             Usage: cmux history <add|list|summary|clear> [flags]
@@ -7780,6 +7837,157 @@ struct CMUXCLI {
 
         default:
             throw CLIError(message: "Unknown workspace-memo subcommand '\(subcommand)'. Use get, set, append, or clear.")
+        }
+    }
+
+    // MARK: - Global Memo CLI
+
+    private func runGlobalMemo(
+        commandArgs: [String],
+        client: SocketClient,
+        jsonOutput: Bool,
+        idFormat: CLIIDFormat
+    ) throws {
+        guard let subcommand = commandArgs.first?.lowercased() else {
+            throw CLIError(message: "global-memo requires a subcommand: get, set, append, or clear")
+        }
+
+        func memoTextFromArgs(_ args: [String], subcommand: String) throws -> String {
+            let (fileOpt, remaining) = parseOption(args, name: "--file")
+            let positionals = remaining.dropFirst(remaining.first == "--" ? 1 : 0)
+            if let unknown = positionals.first(where: { $0.hasPrefix("--") }) {
+                throw CLIError(message: "global-memo \(subcommand): unknown flag '\(unknown)'")
+            }
+            if fileOpt != nil, !positionals.isEmpty {
+                throw CLIError(message: "global-memo \(subcommand) accepts either --file or inline text, not both")
+            }
+
+            let memoText: String
+            if let fileOpt {
+                let resolvedPath = resolvePath(fileOpt)
+                do {
+                    memoText = try String(contentsOfFile: resolvedPath, encoding: .utf8)
+                } catch {
+                    throw CLIError(message: "global-memo \(subcommand): failed to read file '\(resolvedPath)'")
+                }
+            } else {
+                memoText = positionals.joined(separator: " ")
+            }
+            if memoText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw CLIError(message: "global-memo \(subcommand) requires non-empty memo text")
+            }
+            return memoText
+        }
+
+        switch subcommand {
+        case "get":
+            let payload = try client.sendV2(method: "global_memo.get", params: [:])
+            if jsonOutput {
+                print(jsonString(formatIDs(payload, mode: idFormat)))
+            } else if let memo = payload["memo"] as? String {
+                print(memo)
+            }
+
+        case "set":
+            let memoText = try memoTextFromArgs(Array(commandArgs.dropFirst()), subcommand: "set")
+            let payload = try client.sendV2(method: "global_memo.set", params: ["memo": memoText])
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        case "append":
+            let memoText = try memoTextFromArgs(Array(commandArgs.dropFirst()), subcommand: "append")
+            let payload = try client.sendV2(method: "global_memo.append", params: ["memo": memoText])
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        case "clear":
+            let payload = try client.sendV2(method: "global_memo.clear", params: [:])
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        default:
+            throw CLIError(message: "Unknown global-memo subcommand '\(subcommand)'. Use get, set, append, or clear.")
+        }
+    }
+
+    // MARK: - Folder Memo CLI
+
+    private func runFolderMemo(
+        commandArgs: [String],
+        client: SocketClient,
+        jsonOutput: Bool,
+        idFormat: CLIIDFormat
+    ) throws {
+        guard let subcommand = commandArgs.first?.lowercased() else {
+            throw CLIError(message: "folder-memo requires a subcommand: get, set, append, or clear")
+        }
+
+        func directoryFromArgs(_ args: [String]) -> (directory: String, remaining: [String]) {
+            let (dirOpt, remaining) = parseOption(args, name: "--directory")
+            let directory = dirOpt ?? FileManager.default.currentDirectoryPath
+            return (directory, remaining)
+        }
+
+        func memoTextFromArgs(_ args: [String], subcommand: String) throws -> (directory: String, memoText: String) {
+            let (directory, afterDir) = directoryFromArgs(args)
+            let (fileOpt, remaining) = parseOption(afterDir, name: "--file")
+            let positionals = remaining.dropFirst(remaining.first == "--" ? 1 : 0)
+            if let unknown = positionals.first(where: { $0.hasPrefix("--") }) {
+                throw CLIError(message: "folder-memo \(subcommand): unknown flag '\(unknown)'")
+            }
+            if fileOpt != nil, !positionals.isEmpty {
+                throw CLIError(message: "folder-memo \(subcommand) accepts either --file or inline text, not both")
+            }
+
+            let memoText: String
+            if let fileOpt {
+                let resolvedPath = resolvePath(fileOpt)
+                do {
+                    memoText = try String(contentsOfFile: resolvedPath, encoding: .utf8)
+                } catch {
+                    throw CLIError(message: "folder-memo \(subcommand): failed to read file '\(resolvedPath)'")
+                }
+            } else {
+                memoText = positionals.joined(separator: " ")
+            }
+            if memoText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw CLIError(message: "folder-memo \(subcommand) requires non-empty memo text")
+            }
+            return (directory, memoText)
+        }
+
+        switch subcommand {
+        case "get":
+            let (directory, remaining) = directoryFromArgs(Array(commandArgs.dropFirst()))
+            let unexpected = remaining.filter { $0 != "--" }
+            if let unknown = unexpected.first(where: { $0.hasPrefix("--") }) {
+                throw CLIError(message: "folder-memo get: unknown flag '\(unknown)'")
+            }
+            let payload = try client.sendV2(method: "folder_memo.get", params: ["directory": directory])
+            if jsonOutput {
+                print(jsonString(formatIDs(payload, mode: idFormat)))
+            } else if let memo = payload["memo"] as? String {
+                print(memo)
+            }
+
+        case "set":
+            let (directory, memoText) = try memoTextFromArgs(Array(commandArgs.dropFirst()), subcommand: "set")
+            let payload = try client.sendV2(method: "folder_memo.set", params: ["directory": directory, "memo": memoText])
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        case "append":
+            let (directory, memoText) = try memoTextFromArgs(Array(commandArgs.dropFirst()), subcommand: "append")
+            let payload = try client.sendV2(method: "folder_memo.append", params: ["directory": directory, "memo": memoText])
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        case "clear":
+            let (directory, remaining) = directoryFromArgs(Array(commandArgs.dropFirst()))
+            let unexpected = remaining.filter { $0 != "--" }
+            if let unknown = unexpected.first(where: { $0.hasPrefix("--") }) {
+                throw CLIError(message: "folder-memo clear: unknown flag '\(unknown)'")
+            }
+            let payload = try client.sendV2(method: "folder_memo.clear", params: ["directory": directory])
+            printV2Payload(payload, jsonOutput: jsonOutput, idFormat: idFormat, fallbackText: "OK")
+
+        default:
+            throw CLIError(message: "Unknown folder-memo subcommand '\(subcommand)'. Use get, set, append, or clear.")
         }
     }
 
@@ -13626,6 +13834,8 @@ struct CMUXCLI {
           select-workspace --workspace <id|ref>
           rename-workspace [--workspace <id|ref>] <title>
           workspace-memo <get|set|append|clear> [--workspace <id|ref|index>] [--file <path>] [text]
+          global-memo <get|set|append|clear> [--file <path>] [text]
+          folder-memo <get|set|append|clear> [--directory <path>] [--file <path>] [text]
           rename-window [--workspace <id|ref>] <title>
           current-workspace
           read-screen [--workspace <id|ref>] [--surface <id|ref>] [--scrollback] [--lines <n>]

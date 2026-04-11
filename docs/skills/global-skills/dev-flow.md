@@ -44,9 +44,13 @@ Started: [날짜]
 ---"
 "$CMUX" set-status phase "INIT" --icon "⚡" --color "#6B7280"
 
-# 과거 패턴 참조 (플라이휠: 이전 사이클의 교훈)
-"$CMUX" history list --type pattern --limit 10
-# → 과거 반복 피드백 패턴을 참고하여 이번 사이클에 반영
+# 도메인 지식 로드 (플라이휠: 과거 삽질을 반복하지 않기 위해)
+"$CMUX" folder-memo get                          # 이 프로젝트의 축적된 교훈
+"$CMUX" global-memo get                          # 프로젝트 횡단 교훈
+"$CMUX" history list --type pattern --limit 10   # 과거 반복 피드백 패턴
+
+# → 위 3가지를 읽고 이번 사이클에 반영할 사항을 workspace-memo에 기록
+# → 예: "folder-memo에 'SwiftUI onTapGesture count:2와 count:1 충돌 주의' 있음 → 제스처 설계 시 참고"
 
 "$CMUX" history add --type phase --summary "Dev Flow 시작: [기능명]"
 ```
@@ -196,6 +200,14 @@ Started: [날짜]
 - PR: #[number]
 - 완료: [날짜]"
 "$CMUX" set-status phase "DONE" --icon "✅" --color "#22C55E"
+
+# 교훈 축적 (플라이휠 핵심 — ship 완료 시 반드시 실행)
+# 이번 사이클에서 발생한 삽질, 되돌림, 설계 변경을 분류하여 적절한 레벨에 저장:
+#   - 이 프로젝트(코드베이스)에 특화된 교훈 → folder-memo
+#   - 프로젝트를 넘어 일반적으로 적용되는 교훈 → global-memo
+# 예:
+"$CMUX" folder-memo append "- [날짜] [기능명]: [이 프로젝트에서 배운 것. 예: TabItemView의 Equatable+.equatable() 최적화를 침범하면 안 됨]"
+"$CMUX" global-memo append "- [날짜] [기능명]: [범용 교훈. 예: SwiftUI onTapGesture count:2와 count:1은 동시에 쓸 때 디바운스 필요]"
 ```
 
 ---
