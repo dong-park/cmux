@@ -42,15 +42,6 @@ cmux trigger-flash --surface surface:7
 - UUIDs are still accepted as inputs.
 - Request UUID output only when needed: `--id-format uuids|both`.
 
-## Memo Commands
-
-- Workspace Memo (워크스페이스별):
-  `workspace-memo get`, `workspace-memo set`, `workspace-memo append`, `workspace-memo clear`
-- Global Memo (앱 전역, 모든 workspace 공유):
-  `global-memo get`, `global-memo set`, `global-memo append`, `global-memo clear`
-- Folder Memo (프로젝트/폴더별, `--directory` 생략 시 cwd):
-  `folder-memo get [--directory <path>]`, `folder-memo set [--directory <path>] <text>`, `folder-memo append`, `folder-memo clear`
-
 ## Deep-Dive References
 
 | Reference | When to Use |

@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "aide": {
+      "command": "/Users/donghwan/.local/state/fnm_multishells/77297_1775536640904/bin/node",
+      "args": [
+        "/Users/donghwan/.aide/aide-mcp-server.js"
+      ],
+      "env": {
+        "AIDE_GLOBAL_PLUGINS_DIR": "/Users/donghwan/.aide/plugins",
+        "AIDE_PLUGINS_DIR": "/Users/donghwan/cmux/.aide/plugins",
+        "AIDE_WORKSPACE": "/Users/donghwan/cmux"
+      }
+    }
+  }
+}

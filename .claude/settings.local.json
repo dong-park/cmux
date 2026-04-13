@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm /Users/donghwan/.claude/skills/dev-flow/references/phase-guide.md)",
+      "Bash(rmdir /Users/donghwan/.claude/skills/dev-flow/references)"
+    ]
+  }
+}
