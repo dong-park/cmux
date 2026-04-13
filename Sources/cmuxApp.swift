@@ -3213,6 +3213,10 @@ private struct SidebarDebugView: View {
         sidebarBlurOpacity = preset.blurOpacity
         sidebarTintHexLight = nil
         sidebarTintHexDark = nil
+        UserDefaults.standard.set(preset.tabCornerRadius, forKey: "sidebarTabCornerRadius")
+        UserDefaults.standard.set(preset.tabHorizontalPadding, forKey: "sidebarTabHorizontalPadding")
+        UserDefaults.standard.set(preset.tabVerticalPadding, forKey: "sidebarTabVerticalPadding")
+        UserDefaults.standard.set(preset.tabHoverBackgroundOpacity, forKey: "sidebarTabHoverBackgroundOpacity")
     }
 }
 

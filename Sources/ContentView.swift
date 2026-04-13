@@ -8687,6 +8687,10 @@ private struct SidebarTabItemSettingsSnapshot: Equatable {
     let selectionColorHex: String?
     let notificationBadgeColorHex: String?
     let visibleAuxiliaryDetails: SidebarWorkspaceAuxiliaryDetailVisibility
+    let tabCornerRadius: Double
+    let tabHorizontalPadding: Double
+    let tabVerticalPadding: Double
+    let tabHoverBackgroundOpacity: Double
 
     init(defaults: UserDefaults = .standard) {
         sidebarShortcutHintXOffset = Self.double(
@@ -8743,6 +8747,10 @@ private struct SidebarTabItemSettingsSnapshot: Equatable {
         activeTabIndicatorStyle = SidebarActiveTabIndicatorSettings.current(defaults: defaults)
         selectionColorHex = defaults.string(forKey: "sidebarSelectionColorHex")
         notificationBadgeColorHex = defaults.string(forKey: "sidebarNotificationBadgeColorHex")
+        tabCornerRadius = Self.double(defaults: defaults, key: "sidebarTabCornerRadius", defaultValue: 10.0)
+        tabHorizontalPadding = Self.double(defaults: defaults, key: "sidebarTabHorizontalPadding", defaultValue: 12.0)
+        tabVerticalPadding = Self.double(defaults: defaults, key: "sidebarTabVerticalPadding", defaultValue: 10.0)
+        tabHoverBackgroundOpacity = Self.double(defaults: defaults, key: "sidebarTabHoverBackgroundOpacity", defaultValue: 0.0)
     }
 
     private static func bool(
@@ -8820,7 +8828,7 @@ struct VerticalTabsSidebar: View {
 
     /// Space at top of sidebar for traffic light buttons
     private let trafficLightPadding: CGFloat = 28
-    private let tabRowSpacing: CGFloat = 3
+    private let tabRowSpacing: CGFloat = 1
     private let hiddenTitlebarControlsLeadingInset: CGFloat = 72
 
     private var isMinimalMode: Bool {
@@ -8944,7 +8952,7 @@ struct VerticalTabsSidebar: View {
                             let pinnedTabs = tabs.filter(\.isPinned)
                             let unpinnedTabs = tabs.filter { !$0.isPinned }
                             let grouped = groupedTabs(unpinnedTabs)
-                            let hasGroups = grouped.count > 1 || !pinnedTabs.isEmpty
+                            let hasGroups = !grouped.isEmpty
 
                             // Bookmarks section
                             if !pinnedTabs.isEmpty {
@@ -8970,9 +8978,9 @@ struct VerticalTabsSidebar: View {
                                 if hasGroups {
                                     if groupIndex > 0 || !pinnedTabs.isEmpty {
                                         Divider()
-                                            .opacity(0.5)
+                                            .opacity(0.15)
                                             .padding(.horizontal, 14)
-                                            .padding(.top, 6)
+                                            .padding(.top, 4)
                                     }
                                     let isCollapsed = collapsedGroups.contains(group.directory)
                                     SidebarGroupHeader(
@@ -8994,6 +9002,13 @@ struct VerticalTabsSidebar: View {
                                             if let firstTab = group.tabs.first {
                                                 tabManager.openMemoSurface(in: firstTab.id)
                                             }
+                                        },
+                                        onNewWorkspace: {
+                                            let newWs = tabManager.addWorkspace(
+                                                workingDirectory: group.directory,
+                                                placementOverride: .end
+                                            )
+                                            newWs.initialDirectory = group.directory
                                         }
                                     )
                                     .onDrop(
@@ -10054,8 +10069,7 @@ private struct SidebarGlobalMemoButton: View {
             isShowingPopover.toggle()
         } label: {
             Image(systemName: hasMemo ? "note.text" : "note.text.badge.plus")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Color.primary.opacity(hasMemo ? 0.5 : 0.3))
+                .font(.system(size: 11, weight: .medium))
         }
         .buttonStyle(SidebarFooterIconButtonStyle())
         .safeHelp(String(localized: "sidebar.globalMemo.tooltip", defaultValue: "Global Memo"))
@@ -10840,8 +10854,6 @@ private struct SidebarHelpMenuButton: View {
             Image(systemName: "questionmark.circle")
                 .symbolRenderingMode(.monochrome)
                 .font(.system(size: iconSize, weight: .medium))
-                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                .frame(width: buttonSize, height: buttonSize, alignment: .center)
         }
         .buttonStyle(SidebarFooterIconButtonStyle())
         .frame(width: buttonSize, height: buttonSize, alignment: .center)
@@ -11211,22 +11223,31 @@ private struct SidebarFooterIconButtonStyleBody: View {
 
     private var backgroundOpacity: Double {
         guard isEnabled else { return 0.0 }
-        if configuration.isPressed { return 0.16 }
-        if isHovered { return 0.08 }
+        if configuration.isPressed { return 0.14 }
+        if isHovered { return 0.07 }
         return 0.0
+    }
+
+    private var foregroundOpacity: Double {
+        guard isEnabled else { return 0.15 }
+        if configuration.isPressed { return 0.55 }
+        if isHovered { return 0.45 }
+        return 0.25
     }
 
     var body: some View {
         configuration.label
+            .foregroundColor(Color.primary.opacity(foregroundOpacity))
+            .padding(5)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.primary.opacity(backgroundOpacity))
             )
             .onHover { hovering in
                 isHovered = hovering
             }
-            .animation(.easeOut(duration: 0.12), value: isHovered)
-            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .animation(.easeOut(duration: 0.1), value: isHovered)
+            .animation(.easeOut(duration: 0.06), value: configuration.isPressed)
     }
 }
 
@@ -11345,15 +11366,13 @@ private struct SidebarBookmarkHeader: View {
     var body: some View {
         HStack(spacing: 0) {
             Text(String(localized: "sidebar.bookmarks.header", defaultValue: "Pinned"))
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(Color.primary.opacity(0.25))
-                .textCase(.uppercase)
-                .tracking(0.5)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(Color(nsColor: .secondaryLabelColor))
             Spacer()
         }
         .padding(.horizontal, 14)
-        .padding(.top, 18)
-        .padding(.bottom, 6)
+        .padding(.top, 14)
+        .padding(.bottom, 4)
     }
 }
 
@@ -11365,6 +11384,7 @@ private struct SidebarGroupHeader: View {
     let hasFolderMemo: Bool
     let onToggle: () -> Void
     let onOpenMemo: (() -> Void)?
+    let onNewWorkspace: (() -> Void)?
     @State private var isHovering = false
 
     private var hasAnyMemo: Bool {
@@ -11373,38 +11393,54 @@ private struct SidebarGroupHeader: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Button(action: onToggle) {
-                HStack(spacing: 5) {
-                    Text(abbreviatedPath(directory))
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(Color.primary.opacity(0.25))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .tracking(0.5)
-                    if isCollapsed {
-                        Text("\(tabCount)")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(Color.primary.opacity(0.25))
-                    }
-                }
+            Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+                .frame(width: 10)
+
+            Text(abbreviatedPath(directory))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(Color(nsColor: .secondaryLabelColor))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            if isCollapsed {
+                Text("\(tabCount)")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(Color(nsColor: .tertiaryLabelColor))
             }
-            .buttonStyle(.plain)
 
             Spacer()
 
-            if hasAnyMemo || isHovering, let onOpenMemo {
-                Button(action: onOpenMemo) {
-                    Image(systemName: hasAnyMemo ? "note.text" : "note.text.badge.plus")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(Color.primary.opacity(hasAnyMemo ? 0.3 : 0.15))
+            HStack(spacing: 4) {
+                if let onNewWorkspace {
+                    Button(action: onNewWorkspace) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(Color(nsColor: .secondaryLabelColor))
+                    }
+                    .buttonStyle(SidebarFooterIconButtonStyle())
+                    .opacity(isHovering ? 1 : 0)
                 }
-                .buttonStyle(.plain)
-                .transition(.opacity)
+
+                if let onOpenMemo {
+                    Button(action: onOpenMemo) {
+                        Image(systemName: hasAnyMemo ? "note.text" : "note.text.badge.plus")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(Color(nsColor: hasAnyMemo ? .secondaryLabelColor : .tertiaryLabelColor))
+                    }
+                    .buttonStyle(.plain)
+                    .opacity(hasAnyMemo || isHovering ? 1 : 0)
+                }
             }
         }
         .padding(.horizontal, 14)
-        .padding(.top, 18)
-        .padding(.bottom, 6)
+        .padding(.top, 14)
+        .padding(.bottom, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onToggle()
+        }
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
@@ -11650,7 +11686,6 @@ private struct TabItemView: View, Equatable {
     @State private var workspaceObservationGeneration: UInt64 = 0
     @State private var isHovering = false
     @State private var rowHeight: CGFloat = 1
-    @State private var pendingSingleClickWorkItem: DispatchWorkItem?
 
     private var isBeingDragged: Bool {
         draggedTabId == tab.id
@@ -11713,57 +11748,54 @@ private struct TabItemView: View, Equatable {
     }
 
     private var activeBorderLineWidth: CGFloat {
-        switch activeTabIndicatorStyle {
-        case .leftRail:
-            return 0
-        case .solidFill:
-            return isActive ? 1.5 : 0
-        }
+        0
     }
 
     private var activeBorderColor: Color {
-        guard isActive else { return .clear }
-        switch activeTabIndicatorStyle {
-        case .leftRail:
-            return .clear
-        case .solidFill:
-            return Color.primary.opacity(0.5)
-        }
+        .clear
     }
 
     private var usesInvertedActiveForeground: Bool {
-        isActive
+        false
     }
 
     private var activePrimaryTextColor: Color {
-        usesInvertedActiveForeground
-            ? Color(nsColor: sidebarSelectedWorkspaceForegroundNSColor(opacity: 1.0))
-            : Color.primary.opacity(0.6)
+        isActive
+            ? Color(nsColor: .labelColor)
+            : Color(nsColor: .labelColor).opacity(0.75)
     }
 
     private func activeSecondaryColor(_ opacity: Double = 0.75) -> Color {
-        usesInvertedActiveForeground
-            ? Color(nsColor: sidebarSelectedWorkspaceForegroundNSColor(opacity: CGFloat(opacity)))
-            : Color.secondary.opacity(opacity * 0.6)
+        Color(nsColor: .secondaryLabelColor).opacity(opacity)
     }
 
     private var activeUnreadBadgeFillColor: Color {
         if let hex = sidebarNotificationBadgeColorHex, let nsColor = NSColor(hex: hex) {
             return Color(nsColor: nsColor)
         }
-        return usesInvertedActiveForeground ? Color.white.opacity(0.25) : cmuxAccentColor()
+        return cmuxAccentColor()
     }
 
     private var activeProgressTrackColor: Color {
-        usesInvertedActiveForeground ? Color.white.opacity(0.15) : Color.secondary.opacity(0.2)
+        Color.secondary.opacity(0.12)
     }
 
     private var activeProgressFillColor: Color {
-        usesInvertedActiveForeground ? Color.white.opacity(0.8) : cmuxAccentColor()
+        cmuxAccentColor()
     }
 
     private var shortcutHintEmphasis: Double {
-        usesInvertedActiveForeground ? 1.0 : 0.9
+        0.9
+    }
+
+    private var statusDotColor: Color {
+        if let custom = resolvedCustomTabColor {
+            return custom
+        }
+        if isActive {
+            return cmuxAccentColor()
+        }
+        return Color(nsColor: .tertiaryLabelColor)
     }
 
     @ViewBuilder
@@ -11973,160 +12005,86 @@ private struct TabItemView: View, Equatable {
 
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                if unreadCount > 0 {
-                    Text("\(unreadCount)")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(usesInvertedActiveForeground ? Color.white.opacity(0.8) : Color.primary.opacity(0.5))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(usesInvertedActiveForeground ? Color.white.opacity(0.12) : Color.primary.opacity(0.08))
-                        )
-                }
+                // Status dot or shortcut number
+                ZStack {
+                    Circle()
+                        .fill(statusDotColor)
+                        .frame(width: 7, height: 7)
+                        .opacity(showsWorkspaceShortcutHint && workspaceShortcutDigit != nil ? 0 : 1)
 
-                if tab.isPinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(activeSecondaryColor(0.8))
-                        .safeHelp(protectedWorkspaceTooltip)
-                }
-
-                Text(tab.title)
-                    .font(.system(size: 12.5, weight: titleFontWeight))
-                    .foregroundColor(activePrimaryTextColor)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(1)
-
-                // Compact status icons
-                compactStatusIcons
-
-                Spacer(minLength: 0)
-
-                ZStack(alignment: .trailing) {
-                    if !showsWorkspaceShortcutHint {
-                        HStack(spacing: SidebarTrailingAccessoryWidthPolicy.buttonSpacing) {
-                            if showMemoButton {
-                                Button(action: openMemoSurface) {
-                                    Image(systemName: visibleMemoText == nil ? "note.text.badge.plus" : "note.text")
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundColor(activeSecondaryColor(0.7))
-                                }
-                                .buttonStyle(.plain)
-                                .safeHelp(openMemoTooltip)
-                                .accessibilityLabel(Text(openMemoTooltip))
-                                .frame(
-                                    width: SidebarTrailingAccessoryWidthPolicy.memoButtonWidth,
-                                    height: 16,
-                                    alignment: .center
-                                )
-                            }
-
-                            if showCloseButton {
-                                Button(action: {
-                                    #if DEBUG
-                                    dlog("sidebar.close workspace=\(tab.id.uuidString.prefix(5)) method=button")
-                                    #endif
-                                    tabManager.closeWorkspaceWithConfirmation(tab)
-                                }) {
-                                    Image(systemName: "xmark")
-                                        .font(.system(size: 9, weight: .medium))
-                                        .foregroundColor(activeSecondaryColor(0.7))
-                                }
-                                .buttonStyle(.plain)
-                                .safeHelp(closeButtonTooltip)
-                                .frame(
-                                    width: SidebarTrailingAccessoryWidthPolicy.closeButtonWidth,
-                                    height: 16,
-                                    alignment: .center
-                                )
-                            }
-                        }
-                    }
-
-                    if showsWorkspaceShortcutHint, let workspaceShortcutLabel {
-                        Text(workspaceShortcutLabel)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
+                    if let digit = workspaceShortcutDigit {
+                        Text("\(digit)")
                             .font(.system(size: 10, weight: .semibold, design: .rounded))
                             .monospacedDigit()
-                            .foregroundColor(activePrimaryTextColor)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(ShortcutHintPillBackground(emphasis: shortcutHintEmphasis))
-                            .offset(
-                                x: ShortcutHintDebugSettings.clamped(sidebarShortcutHintXOffset),
-                                y: ShortcutHintDebugSettings.clamped(sidebarShortcutHintYOffset)
-                            )
-                            .transition(.opacity)
+                            .foregroundColor(isActive ? cmuxAccentColor() : Color.primary.opacity(0.6))
+                            .opacity(showsWorkspaceShortcutHint ? 1 : 0)
                     }
                 }
-                .animation(.easeInOut(duration: 0.14), value: showsModifierShortcutHints || alwaysShowShortcutHints)
-                .frame(width: trailingAccessoryWidth, height: 16, alignment: .trailing)
-            }
+                .frame(width: 12)
+                .animation(.easeInOut(duration: 0.12), value: showsWorkspaceShortcutHint)
 
-            // Branch row only
-            if detailVisibility.showsBranchDirectory {
-                if sidebarBranchVerticalLayout {
-                    if !branchDirectoryLines.isEmpty {
-                        HStack(spacing: 3) {
-                            if sidebarShowGitBranchIcon, branchLinesContainBranch {
-                                Image(systemName: "arrow.triangle.branch")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(activeSecondaryColor(0.4))
-                            }
-                            Text(branchDirectoryLines.compactMap(\.branch).joined(separator: ", "))
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundColor(activeSecondaryColor(0.45))
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        if tab.isPinned {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 7, weight: .medium))
+                                .foregroundColor(activeSecondaryColor(0.8))
+                                .safeHelp(protectedWorkspaceTooltip)
+                        }
+
+                        Text(tab.title)
+                            .font(.system(size: 12, weight: titleFontWeight))
+                            .foregroundColor(activePrimaryTextColor)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(1)
+
+                        // Compact status icons
+                        compactStatusIcons
+
+                        Spacer(minLength: 0)
+
+                        if unreadCount > 0 {
+                            Text("\(unreadCount)")
+                                .font(.system(size: 9, weight: .medium, design: .rounded))
+                                .foregroundColor(Color(nsColor: .secondaryLabelColor))
+                        }
+
+                        // Branch name on the right
+                        if detailVisibility.showsBranchDirectory, sidebarShowGitBranch,
+                           let branchText = sidebarBranchVerticalLayout
+                               ? (branchDirectoryLines.isEmpty ? nil : branchDirectoryLines.compactMap(\.branch).joined(separator: ", "))
+                               : compactGitBranchSummaryText {
+                            Text(branchText)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Color(nsColor: .secondaryLabelColor))
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                         }
-                        .padding(.leading, 2)
                     }
-                } else if let branchText = compactGitBranchSummaryText {
-                    HStack(spacing: 3) {
-                        if sidebarShowGitBranchIcon {
-                            Image(systemName: "arrow.triangle.branch")
-                                .font(.system(size: 9))
-                                .foregroundColor(activeSecondaryColor(0.4))
-                        }
-                        Text(branchText)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundColor(activeSecondaryColor(0.45))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    .padding(.leading, 2)
-                }
-            }
+                } // VStack (title + subtitle)
 
+            }
         }
         .animation(.easeInOut(duration: 0.2), value: tab.logEntries.count)
         .animation(.easeInOut(duration: 0.2), value: tab.progress != nil)
         .animation(.easeInOut(duration: 0.2), value: tab.metadataBlocks.count)
         .animation(.easeInOut(duration: 0.2), value: tab.memo ?? "")
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(backgroundColor)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(activeBorderColor, lineWidth: activeBorderLineWidth)
-                }
+            Rectangle()
+                .fill(resolvedBackgroundColor)
                 .overlay(alignment: .leading) {
                     if showsLeadingRail {
-                        Capsule(style: .continuous)
+                        Rectangle()
                             .fill(railColor)
-                            .frame(width: 3)
-                            .padding(.leading, 4)
-                            .padding(.vertical, 5)
-                            .offset(x: -1)
+                            .frame(width: 2)
                     }
                 }
         )
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 0)
         .background {
             GeometryReader { proxy in
                 Color.clear
@@ -12192,17 +12150,8 @@ private struct TabItemView: View, Equatable {
             selectedTabIds: $selectedTabIds,
             lastSidebarSelectionIndex: $lastSidebarSelectionIndex
         ))
-        .onTapGesture(count: 2) {
-            pendingSingleClickWorkItem?.cancel()
-            pendingSingleClickWorkItem = nil
-            promptRename()
-        }
         .onTapGesture(count: 1) {
-            let workItem = DispatchWorkItem { [self] in
-                updateSelection()
-            }
-            pendingSingleClickWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: workItem)
+            updateSelection()
         }
         .onHover { hovering in
             isHovering = hovering
@@ -12451,20 +12400,31 @@ private struct TabItemView: View, Equatable {
     }
 
     private var backgroundColor: Color {
-        switch activeTabIndicatorStyle {
-        case .leftRail:
-            if isActive        { return Color(nsColor: selectionBackgroundColor) }
-            if isMultiSelected { return cmuxAccentColor().opacity(0.25) }
-            return Color.clear
-        case .solidFill:
-            if isActive { return Color(nsColor: selectionBackgroundColor) }
-            if let custom = resolvedCustomTabColor {
-                if isMultiSelected { return custom.opacity(0.35) }
-                return custom.opacity(0.7)
+        if isActive {
+            if colorScheme == .dark {
+                return Color.white.opacity(0.12)
             }
-            if isMultiSelected { return cmuxAccentColor().opacity(0.25) }
-            return Color.clear
+            return Color.black.opacity(0.08)
         }
+        if isMultiSelected {
+            if colorScheme == .dark {
+                return Color.white.opacity(0.07)
+            }
+            return Color.black.opacity(0.05)
+        }
+        return Color.clear
+    }
+
+    private var resolvedBackgroundColor: Color {
+        let base = backgroundColor
+        if base != Color.clear { return base }
+        if isHovering {
+            if colorScheme == .dark {
+                return Color.white.opacity(0.06)
+            }
+            return Color.black.opacity(0.04)
+        }
+        return base
     }
 
     private var railColor: Color {
@@ -12472,8 +12432,7 @@ private struct TabItemView: View, Equatable {
     }
 
     private var explicitRailColor: Color? {
-        guard activeTabIndicatorStyle == .leftRail,
-              let custom = resolvedCustomTabColor else {
+        guard let custom = resolvedCustomTabColor else {
             return nil
         }
         return custom.opacity(0.95)
@@ -14569,8 +14528,10 @@ private struct SidebarBackdrop: View {
                             Color(nsColor: tintColor)
                         }
                     }
+                } else {
+                    // Solid opaque fill when material is none
+                    Color(nsColor: tintColor)
                 }
-                // When material is none or useWindowLevelGlass, render nothing
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         )
@@ -14693,6 +14654,7 @@ enum SidebarPresetOption: String, CaseIterable, Identifiable {
     case popoverGlass
     case hudGlass
     case underWindow
+    case warp
 
     var id: String { rawValue }
 
@@ -14704,6 +14666,7 @@ enum SidebarPresetOption: String, CaseIterable, Identifiable {
         case .popoverGlass: return String(localized: "settings.preset.popoverGlass", defaultValue: "Popover Glass")
         case .hudGlass: return String(localized: "settings.preset.hudGlass", defaultValue: "HUD Glass")
         case .underWindow: return String(localized: "settings.preset.underWindow", defaultValue: "Under Window")
+        case .warp: return String(localized: "settings.preset.warp", defaultValue: "Warp")
         }
     }
 
@@ -14715,6 +14678,7 @@ enum SidebarPresetOption: String, CaseIterable, Identifiable {
         case .popoverGlass: return .popover
         case .hudGlass: return .hudWindow
         case .underWindow: return .underWindowBackground
+        case .warp: return .none
         }
     }
 
@@ -14726,6 +14690,7 @@ enum SidebarPresetOption: String, CaseIterable, Identifiable {
         case .popoverGlass: return .behindWindow
         case .hudGlass: return .withinWindow
         case .underWindow: return .withinWindow
+        case .warp: return .withinWindow
         }
     }
 
@@ -14737,6 +14702,7 @@ enum SidebarPresetOption: String, CaseIterable, Identifiable {
         case .popoverGlass: return .active
         case .hudGlass: return .active
         case .underWindow: return .followWindow
+        case .warp: return .active
         }
     }
 
@@ -14748,6 +14714,7 @@ enum SidebarPresetOption: String, CaseIterable, Identifiable {
         case .popoverGlass: return "#000000"
         case .hudGlass: return "#000000"
         case .underWindow: return "#000000"
+        case .warp: return "#191919"
         }
     }
 
@@ -14759,6 +14726,7 @@ enum SidebarPresetOption: String, CaseIterable, Identifiable {
         case .popoverGlass: return 0.10
         case .hudGlass: return 0.62
         case .underWindow: return 0.14
+        case .warp: return 1.0
         }
     }
 
@@ -14770,6 +14738,7 @@ enum SidebarPresetOption: String, CaseIterable, Identifiable {
         case .popoverGlass: return 10.0
         case .hudGlass: return 10.0
         case .underWindow: return 6.0
+        case .warp: return 0.0
         }
     }
 
@@ -14781,6 +14750,35 @@ enum SidebarPresetOption: String, CaseIterable, Identifiable {
         case .popoverGlass: return 0.9
         case .hudGlass: return 0.98
         case .underWindow: return 0.9
+        case .warp: return 0.0
+        }
+    }
+
+    var tabCornerRadius: Double {
+        switch self {
+        case .warp: return 6.0
+        default: return 10.0
+        }
+    }
+
+    var tabHorizontalPadding: Double {
+        switch self {
+        case .warp: return 10.0
+        default: return 12.0
+        }
+    }
+
+    var tabVerticalPadding: Double {
+        switch self {
+        case .warp: return 7.0
+        default: return 10.0
+        }
+    }
+
+    var tabHoverBackgroundOpacity: Double {
+        switch self {
+        case .warp: return 0.06
+        default: return 0.0
         }
     }
 }

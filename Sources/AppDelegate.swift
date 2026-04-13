@@ -5988,7 +5988,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if let workingDirectory {
             workspace = context.tabManager.addWorkspace(workingDirectory: workingDirectory, select: true)
         } else {
-            workspace = context.tabManager.addTab(select: true)
+            // Inherit the current workspace's folder group directory
+            let currentDir = context.tabManager.selectedWorkspace?.initialDirectory
+            let newWs = context.tabManager.addTab(select: true)
+            if let currentDir {
+                newWs.initialDirectory = currentDir
+            }
+            workspace = newWs
         }
         #if DEBUG
         logWorkspaceCreationRouting(
@@ -10227,6 +10233,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // New surface: Cmd+T
         if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .newSurface)) {
             tabManager?.newSurface()
+            return true
+        }
+
+        // Open memo: Cmd+Shift+M
+        if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .openMemo)) {
+            _ = tabManager?.openMemoSurface()
             return true
         }
 

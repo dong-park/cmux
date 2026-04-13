@@ -225,7 +225,7 @@ struct TitlebarControlButton<Content: View>: View {
     @State private var isHovering = false
 
     var body: some View {
-        let baseButton = Button(action: action) {
+        Button(action: action) {
             content()
                 .frame(width: config.buttonSize, height: config.buttonSize)
                 .contentShape(Rectangle())
@@ -234,18 +234,14 @@ struct TitlebarControlButton<Content: View>: View {
         .frame(width: config.buttonSize, height: config.buttonSize)
         .contentShape(Rectangle())
         .background(hoverBackground)
-
-        if titlebarControlsShouldTrackButtonHover(config: config) {
-            baseButton.onHover { isHovering = $0 }
-        } else {
-            baseButton
-        }
+        .animation(.easeOut(duration: 0.1), value: isHovering)
+        .onHover { isHovering = $0 }
     }
 
     @ViewBuilder
     private var hoverBackground: some View {
-        if config.hoverBackground && isHovering {
-            RoundedRectangle(cornerRadius: config.buttonCornerRadius, style: .continuous)
+        if isHovering {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.primary.opacity(0.08))
         }
     }
@@ -369,7 +365,7 @@ struct TitlebarControlsView: View {
                 #endif
                 onToggleSidebar()
             }) {
-                iconLabel(systemName: "sidebar.left", config: config)
+                iconLabel(systemName: "bubble.left.fill", config: config)
             }
             .accessibilityIdentifier("titlebarControl.toggleSidebar")
             .accessibilityLabel(String(localized: "titlebar.sidebar.accessibilityLabel", defaultValue: "Toggle Sidebar"))
@@ -382,7 +378,7 @@ struct TitlebarControlsView: View {
                 onToggleNotifications()
             }) {
                 ZStack(alignment: .topTrailing) {
-                    iconLabel(systemName: "bell", config: config)
+                    iconLabel(systemName: "doc.on.doc", config: config)
 
                     if notificationStore.unreadCount > 0 {
                         Text("\(min(notificationStore.unreadCount, 99))")
@@ -408,7 +404,7 @@ struct TitlebarControlsView: View {
                 #endif
                 onOpenFolder()
             }) {
-                iconLabel(systemName: "folder.badge.plus", config: config)
+                iconLabel(systemName: "magnifyingglass", config: config)
             }
             .accessibilityIdentifier("titlebarControl.openFolder")
             .accessibilityLabel(String(localized: "sidebar.addFolder.button", defaultValue: "Add Folder"))
@@ -420,7 +416,7 @@ struct TitlebarControlsView: View {
                 #endif
                 onNewTab()
             }) {
-                iconLabel(systemName: "plus", config: config)
+                iconLabel(systemName: "square.on.square", config: config)
             }
             .accessibilityIdentifier("titlebarControl.newTab")
             .accessibilityLabel(String(localized: "titlebar.newWorkspace.accessibilityLabel", defaultValue: "New Workspace"))
@@ -549,19 +545,10 @@ struct TitlebarControlsView: View {
 
     @ViewBuilder
     private func iconLabel(systemName: String, config: TitlebarControlsStyleConfig) -> some View {
-        let icon = Image(systemName: systemName)
-            .font(.system(size: config.iconSize, weight: .semibold))
+        Image(systemName: systemName)
+            .font(.system(size: config.iconSize, weight: .medium))
+            .foregroundColor(Color.primary.opacity(0.55))
             .frame(width: config.buttonSize, height: config.buttonSize)
-
-        if config.buttonBackground {
-            icon
-                .background(
-                    RoundedRectangle(cornerRadius: config.buttonCornerRadius)
-                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.7))
-                )
-        } else {
-            icon
-        }
     }
 }
 
